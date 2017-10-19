@@ -1,8 +1,8 @@
 sample:
   name: CDC ACM USB
 tests:
-  test_x86:
+  test:
     depends_on: usb_device
-    platform_whitelist: arduino_101 nrf52840_pca10056
+    platform_whitelist: arduino_101 nrf52840_pca10056 frdm_k64f
     tags: usb
     harness: console

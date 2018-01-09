@@ -28,6 +28,7 @@
 
 #include <net/net_context.h>
 #include <net/websocket.h>
+#include <json.h>
 
 #include "../../../subsys/net/ip/ipv6.h"
 #include "../../../subsys/net/ip/route.h"
@@ -956,9 +957,8 @@ out:
 	return ret;
 }
 
-static void nbr_cb(struct net_nbr *nbr, void *user_data)
+static void append_nbr(struct net_nbr *nbr, struct user_data *data)
 {
-	struct user_data *data = user_data;
 	int ret;
 
 	if (data->iface != nbr->iface) {
@@ -1021,7 +1021,14 @@ out:
 	data->failure = ret;
 }
 
-static int send_ipv6_neighbors(struct http_ctx *ctx)
+static void nbr_cb(struct net_nbr *nbr, void *user_data)
+{
+	struct user_data *data = user_data;
+
+	append_nbr(nbr, data);
+}
+
+static int send_ipv6_neighbors(struct http_ctx *ctx, struct net_nbr *nbr)
 {
 	struct user_data data;
 	int ret;
@@ -1038,7 +1045,11 @@ static int send_ipv6_neighbors(struct http_ctx *ctx)
 	data.nbr_count = 0;
 	data.iface_count = 0;
 
-	net_ipv6_nbr_foreach(nbr_cb, &data);
+	if (!nbr) {
+		net_ipv6_nbr_foreach(nbr_cb, &data);
+	} else {
+		append_nbr(nbr, &data);
+	}
 
 	if (data.failure < 0) {
 		ret = data.failure;
@@ -1066,9 +1077,53 @@ out:
 	return ret;
 }
 
-static void route_cb(struct net_route_entry *entry, void *user_data)
+static int send_ipv6_neighbor_deletion(struct http_ctx *ctx,
+				       struct net_if *iface,
+				       struct in6_addr *addr)
 {
-	struct user_data *data = user_data;
+	struct user_data data;
+	int ret;
+
+	data.ctx = ctx;
+	data.iface = NULL;
+	data.pkt = NULL;
+
+	ret = append_and_send_data(&data, false, "{\"neighbors\":[");
+	if (ret < 0) {
+		goto out;
+	}
+
+	ret = append_and_send_data(&data, false, "{\"%p\":[{", iface);
+	if (ret < 0) {
+		goto out;
+	}
+
+	ret = add_string(&data, "Operation", "delete", true);
+	if (ret < 0) {
+		goto out;
+	}
+
+	ret = add_string(&data, "IPv6 address",
+			 net_sprint_ipv6_addr(addr), false);
+	if (ret < 0) {
+		goto out;
+	}
+
+	ret = append_and_send_data(&data, true, "}]}]}");
+	if (ret < 0) {
+		goto out;
+	}
+
+	return ret;
+
+out:
+	NET_DBG("Cannot send neighbor information");
+
+	return ret;
+}
+
+static void append_route(struct net_route_entry *entry, struct user_data *data)
+{
 	struct net_route_nexthop *nexthop_route;
 	int ret = 0;
 
@@ -1121,7 +1176,16 @@ out:
 	data->failure = ret;
 }
 
-static void iface_cb_for_routes(struct net_if *iface, void *user_data)
+static void route_cb(struct net_route_entry *entry, void *user_data)
+{
+	struct user_data *data = user_data;
+
+	append_route(entry, data);
+}
+
+static void append_route_iface(struct net_if *iface,
+			       struct net_route_entry *route,
+			       void *user_data)
 {
 	struct user_data *data = user_data;
 	int ret;
@@ -1140,7 +1204,11 @@ static void iface_cb_for_routes(struct net_if *iface, void *user_data)
 	data->iface = iface;
 	data->route_count = 0;
 
-	net_route_foreach(route_cb, data);
+	if (!route) {
+		net_route_foreach(route_cb, data);
+	} else {
+		append_route(route, data);
+	}
 
 	data->iface_count++;
 
@@ -1156,7 +1224,14 @@ out:
 	}
 }
 
-static int send_ipv6_routes(struct http_ctx *ctx)
+static void iface_cb_for_routes(struct net_if *iface, void *user_data)
+{
+	append_route_iface(iface, NULL, user_data);
+}
+
+static int send_ipv6_routes(struct http_ctx *ctx,
+			    struct net_if *iface,
+			    struct net_route_entry *route)
 {
 	struct user_data data;
 	int ret;
@@ -1170,7 +1245,11 @@ static int send_ipv6_routes(struct http_ctx *ctx)
 		goto out;
 	}
 
-	net_if_foreach(iface_cb_for_routes, &data);
+	if (!iface && !route) {
+		net_if_foreach(iface_cb_for_routes, &data);
+	} else {
+		append_route_iface(iface, route, &data);
+	}
 
 	ret = append_and_send_data(&data, true, "]}");
 	if (ret < 0) {
@@ -1180,6 +1259,81 @@ static int send_ipv6_routes(struct http_ctx *ctx)
 	return ret;
 
 out:
+	return ret;
+}
+
+static int send_ipv6_route_deletion(struct http_ctx *ctx,
+				    struct net_if *iface,
+				    struct net_event_ipv6_route *info)
+{
+	struct user_data data;
+	int ret;
+
+	data.ctx = ctx;
+	data.pkt = NULL;
+
+	ret = append_and_send_data(&data, false, "{\"routes\":[");
+	if (ret < 0) {
+		goto out;
+	}
+
+	ret = append_and_send_data(&data, false, "{\"%p\":[", iface);
+	if (ret < 0) {
+		goto out;
+	}
+
+	ret = append_and_send_data(&data, false, "{\"Operation\":\"delete\",");
+	if (ret < 0) {
+		goto out;
+	}
+
+	ret = append_and_send_data(&data, false,
+				   "\"IPv6 prefix\":\"%s/%d\"",
+				   net_sprint_ipv6_addr(&info->addr),
+				   info->prefix_len);
+	if (ret < 0) {
+		goto out;
+	}
+
+	ret = append_and_send_data(&data, true, "}]}]}");
+	if (ret < 0) {
+		goto out;
+	}
+
+	return ret;
+
+out:
+	net_pkt_unref(data.pkt);
+	return ret;
+}
+
+static int send_topology_information(struct http_ctx *ctx)
+{
+	struct user_data data;
+	int ret;
+
+	data.ctx = ctx;
+	data.iface_count = 0;
+	data.pkt = NULL;
+
+	data.pkt = net_app_get_net_pkt(&ctx->app_ctx, AF_UNSPEC,
+				       ALLOC_TIMEOUT);
+	if (!data.pkt) {
+		return -ENOMEM;
+	}
+
+	ret = coap_append_topology_info(data.pkt);
+	if (ret < 0) {
+		return -ENOMEM;
+	}
+
+	ret = ws_send_msg_to_client(ctx, data.pkt, WS_OPCODE_DATA_TEXT,
+				    true, NULL);
+	if (ret < 0) {
+		NET_DBG("Could not send %d bytes data to client",
+			net_pkt_get_len(data.pkt));
+	}
+
 	return ret;
 }
 
@@ -1197,14 +1351,21 @@ static void ws_send_info(struct http_ctx *ctx)
 		NET_ERR("Cannot send RPL configuration (%d)", ret);
 	}
 
-	ret = send_ipv6_neighbors(ctx);
+	ret = send_ipv6_neighbors(ctx, NULL);
 	if (ret < 0) {
 		NET_ERR("Cannot send neighbor information (%d)", ret);
+		return;
 	}
 
-	ret = send_ipv6_routes(ctx);
+	ret = send_ipv6_routes(ctx, NULL, NULL);
 	if (ret < 0) {
 		NET_ERR("Cannot send route information (%d)", ret);
+		return;
+	}
+
+	ret = send_topology_information(ctx);
+	if (ret < 0) {
+		NET_ERR("Cannot send topology information (%d)", ret);
 	}
 }
 
@@ -1272,6 +1433,91 @@ static void http_connected(struct http_ctx *ctx,
 	}
 }
 
+/**
+ * The sample coap JSON command from WebUI looks like this.
+ * {"coap":{"command":"led_on","ipv6_addr":"fe80::212:4b00:0:2"}}
+ */
+
+#define JSON_COAP_PREFIX "{\"coap\":"
+#define MAX_PAYLOAD_LEN	100
+struct coap_command {
+	const char *command;
+	const char *ipv6_addr;
+};
+
+struct rpl_coap_req {
+	struct coap_command coap;
+};
+
+static const struct json_obj_descr command_descr[] = {
+	JSON_OBJ_DESCR_PRIM(struct coap_command, command, JSON_TOK_STRING),
+	JSON_OBJ_DESCR_PRIM(struct coap_command, ipv6_addr, JSON_TOK_STRING),
+};
+
+static const struct json_obj_descr coap_descr[] = {
+	JSON_OBJ_DESCR_OBJECT(struct rpl_coap_req, coap, command_descr),
+};
+
+static void handle_coap_request(struct http_ctx *ctx,
+				struct net_pkt *pkt,
+				void *user_data)
+{
+	struct rpl_coap_req req;
+	struct net_buf *frag;
+	struct in6_addr peer_addr;
+	enum coap_request_type type;
+	char payload[MAX_PAYLOAD_LEN];
+	u8_t *ptr;
+	u8_t len;
+	u16_t pos;
+	int ret;
+
+	len = net_pkt_appdatalen(pkt);
+	if (len > MAX_PAYLOAD_LEN - 1) {
+		NET_ERR("Can't handle payload more than %d(%d)",
+			MAX_PAYLOAD_LEN, len);
+	}
+
+	frag = pkt->frags;
+	ptr = net_pkt_appdata(pkt);
+
+	pos = (u16_t)(ptr - frag->data);
+
+	frag = net_frag_read(frag, pos, &pos, len, &payload[0]);
+	if (!frag && pos == 0xffff) {
+		NET_WARN("Failed to read payload");
+		return;
+	}
+
+	payload[len] = '\0';
+
+	ret = json_obj_parse((char *)payload, len, coap_descr,
+			     ARRAY_SIZE(coap_descr), &req);
+	if (ret < 0) {
+		NET_ERR("Failed to parse JSON string %d", ret);
+		return;
+	}
+
+	ret = net_addr_pton(AF_INET6, req.coap.ipv6_addr, &peer_addr);
+	if (ret < 0) {
+		NET_WARN("Invalid peer address %s", req.coap.ipv6_addr);
+		return;
+	}
+
+	if (strcmp(req.coap.command, "led_on") == 0) {
+		type = COAP_REQ_LED_ON;
+	} else if (strcmp(req.coap.command, "led_off") == 0) {
+		type = COAP_REQ_LED_OFF;
+	} else {
+		NET_WARN("Invalid coap command %s", req.coap.command);
+		return;
+	}
+
+	coap_send_request(&peer_addr, type, NULL, NULL);
+	NET_DBG("Send CoAP request '%s'-'%s'", req.coap.command,
+		req.coap.ipv6_addr);
+}
+
 static void http_received(struct http_ctx *ctx,
 			  struct net_pkt *pkt,
 			  int status,
@@ -1280,6 +1526,12 @@ static void http_received(struct http_ctx *ctx,
 {
 	if (!status) {
 		NET_DBG("Received %d bytes data", net_pkt_appdatalen(pkt));
+
+		if (!strncmp((char *)net_pkt_appdata(pkt), JSON_COAP_PREFIX,
+			     sizeof(JSON_COAP_PREFIX) - 1)) {
+			handle_coap_request(ctx, pkt, user_data);
+		}
+
 
 		if (pkt) {
 			net_pkt_unref(pkt);
@@ -1320,7 +1572,7 @@ static const char *get_string(int str_len, const char *str)
 }
 
 static enum http_verdict default_handler(struct http_ctx *ctx,
-				       enum http_connection_type type)
+					 enum http_connection_type type)
 {
 	NET_DBG("No handler for %s URL %s",
 		type == HTTP_CONNECTION ? "HTTP" : "WS",
@@ -1331,6 +1583,138 @@ static enum http_verdict default_handler(struct http_ctx *ctx,
 	}
 
 	return HTTP_VERDICT_DROP;
+}
+
+static void coap_obs_cb(struct coap_packet *response, void *user_data)
+{
+	int ret;
+
+	ret = send_topology_information(&http_ctx);
+	if (ret < 0) {
+		NET_ERR("Cannot send topology (%d)", ret);
+	}
+}
+
+static struct net_mgmt_event_callback br_mgmt_cb;
+static void mgmt_cb(struct net_mgmt_event_callback *cb,
+		    u32_t mgmt_event, struct net_if *iface)
+{
+#if !defined(CONFIG_NET_L2_IEEE802154)
+	NET_DBG("CONFIG_NET_L2_IEEE802154 not enabled");
+	return;
+#endif
+	struct net_if *iface_802154 = net_if_get_ieee802154();
+	struct net_event_ipv6_route *route_info;
+	struct net_event_ipv6_nbr *nbr_info;
+	struct net_route_entry *route;
+	struct net_nbr *nbr;
+	int ret;
+
+	if (iface_802154 != iface) {
+		return;
+	}
+
+	if (!cb->info) {
+		return;
+	}
+
+	if (mgmt_event == NET_EVENT_IPV6_NBR_ADD) {
+		nbr_info = (struct net_event_ipv6_nbr *)cb->info;
+		if (!nbr_info) {
+			NET_ERR("Invalid info received on event");
+			return;
+		}
+
+		nbr = net_ipv6_nbr_lookup(iface, &nbr_info->addr);
+		if (!nbr || !net_ipv6_nbr_data(nbr)) {
+			NET_ERR("Invalid neighbor data received");
+			return;
+		}
+
+		NET_DBG("NBR add %s", net_sprint_ipv6_addr(&nbr_info->addr));
+
+		ret = send_ipv6_neighbors(&http_ctx, nbr);
+		if (ret < 0) {
+			NET_ERR("Cannot send neighbor information (%d)", ret);
+			return;
+		}
+	} else if (mgmt_event == NET_EVENT_IPV6_NBR_DEL) {
+		nbr_info = (struct net_event_ipv6_nbr *)cb->info;
+		if (!nbr_info) {
+			NET_ERR("Invalid info received on event");
+			return;
+		}
+
+		NET_DBG("NBR del %s", net_sprint_ipv6_addr(&nbr_info->addr));
+
+		ret = send_ipv6_neighbor_deletion(&http_ctx, iface,
+						  &nbr_info->addr);
+		if (ret < 0) {
+			NET_ERR("Cannot send neighbor information (%d)", ret);
+			return;
+		}
+	} else if (mgmt_event == NET_EVENT_IPV6_ROUTE_ADD) {
+		route_info = (struct net_event_ipv6_route *)cb->info;
+		if (!route_info) {
+			NET_ERR("Invalid info received on event");
+			return;
+		}
+
+		route = net_route_lookup(iface, &route_info->addr);
+		if (!route) {
+			NET_ERR("Invalid route entry received");
+			return;
+		}
+
+		NET_DBG("ROUTE add addr %s/%d",
+			net_sprint_ipv6_addr(&route_info->addr),
+			route_info->prefix_len);
+		 {
+		   NET_DBG("ROUTE add nexthop %s",
+			net_sprint_ipv6_addr(&route_info->nexthop));
+
+		 }
+
+		coap_send_request(&route_info->nexthop,
+				  COAP_REQ_RPL_OBS, coap_obs_cb, NULL);
+
+		ret = send_ipv6_routes(&http_ctx, iface, route);
+		if (ret < 0) {
+			NET_ERR("Cannot send route information (%d)", ret);
+			return;
+		}
+	} else if (mgmt_event == NET_EVENT_IPV6_ROUTE_DEL) {
+		route_info = (struct net_event_ipv6_route *)cb->info;
+		if (!route_info) {
+			NET_ERR("Invalid info received on event");
+			return;
+		}
+
+		NET_DBG("ROUTE del addr %s/%d",
+			net_sprint_ipv6_addr(&route_info->addr),
+			route_info->prefix_len);
+		 {
+		   NET_DBG("ROUTE del nexthop %s",
+			net_sprint_ipv6_addr(&route_info->nexthop));
+
+		 }
+
+		ret = send_ipv6_route_deletion(&http_ctx, iface, route_info);
+		if (ret < 0) {
+			NET_ERR("Cannot send route information (%d)", ret);
+			return;
+		}
+
+		coap_remove_node_from_topology(&route_info->nexthop);
+
+		ret = send_topology_information(&http_ctx);
+		if (ret < 0) {
+			NET_ERR("Cannot send topology information (%d)", ret);
+		}
+	}
+
+	/* Ignore other events */
+	return;
 }
 
 void start_http_server(struct net_if *iface)
@@ -1430,6 +1814,13 @@ void start_http_server(struct net_if *iface)
 	http_server_enable(&http_ctx);
 
 	rpl.iface = iface;
+
+	net_mgmt_init_event_callback(&br_mgmt_cb, mgmt_cb,
+				     NET_EVENT_IPV6_NBR_ADD |
+				     NET_EVENT_IPV6_NBR_DEL |
+				     NET_EVENT_IPV6_ROUTE_ADD |
+				     NET_EVENT_IPV6_ROUTE_DEL);
+	net_mgmt_add_event_callback(&br_mgmt_cb);
 }
 
 void stop_http_server(void)

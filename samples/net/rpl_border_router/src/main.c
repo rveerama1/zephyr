@@ -53,4 +53,8 @@ void main(void)
 	}
 
 	setup_rpl(iface, CONFIG_NET_RPL_PREFIX);
+
+#if defined (CONFIG_COAP)
+	coap_init();
+#endif
 }

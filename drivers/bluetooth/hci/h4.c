@@ -459,7 +459,7 @@ static int _bt_uart_init(struct device *unused)
 {
 	ARG_UNUSED(unused);
 
-	h4_dev = device_get_binding(CONFIG_BT_UART_ON_DEV_NAME);
+	h4_dev = device_get_binding("UART_0");
 	if (!h4_dev) {
 		return -EINVAL;
 	}

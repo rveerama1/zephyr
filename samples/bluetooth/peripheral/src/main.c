@@ -280,6 +280,8 @@ void main(void)
 {
 	int err;
 
+	printk("Initializing Bluetooth...\n");
+
 	err = bt_enable(bt_ready);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);

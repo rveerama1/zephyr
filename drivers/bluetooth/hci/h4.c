@@ -329,6 +329,7 @@ static inline void read_header(void)
 	}
 }
 
+#if 0
 static inline void process_tx(void)
 {
 	int bytes;
@@ -378,6 +379,7 @@ done:
 		uart_irq_tx_disable(h4_dev);
 	}
 }
+#endif
 
 static inline void process_rx(void)
 {
@@ -402,9 +404,11 @@ static void bt_uart_isr(struct device *unused)
 	ARG_UNUSED(unused);
 
 	while (uart_irq_update(h4_dev) && uart_irq_is_pending(h4_dev)) {
+#if 0
 		if (uart_irq_tx_ready(h4_dev)) {
 			process_tx();
 		}
+#endif
 
 		if (uart_irq_rx_ready(h4_dev)) {
 			process_rx();
@@ -416,8 +420,23 @@ static int h4_send(struct net_buf *buf)
 {
 	BT_DBG("buf %p type %u len %u", buf, bt_buf_get_type(buf), buf->len);
 
-	net_buf_put(&tx.fifo, buf);
-	uart_irq_tx_enable(h4_dev);
+	switch (bt_buf_get_type(buf)) {
+	case BT_BUF_ACL_OUT:
+		uart_poll_out(h4_dev, H4_ACL);
+		break;
+	case BT_BUF_CMD:
+		uart_poll_out(h4_dev, H4_CMD);
+		break;
+	default:
+		BT_ERR("Unknown buffer type");
+		return -EINVAL;
+	}
+
+	while (buf->len) {
+		uart_poll_out(h4_dev, net_buf_pull_u8(buf));
+	}
+
+	net_buf_unref(buf);
 
 	return 0;
 }

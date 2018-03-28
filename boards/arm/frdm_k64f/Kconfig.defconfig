@@ -131,8 +131,17 @@ if NETWORKING
 config NET_L2_ETHERNET
 	def_bool y
 
+if NET_L2_ETHERNET
+if USB_DEVICE_NETWORK_ECM
 config ETH_MCUX_0
-	def_bool y if NET_L2_ETHERNET
+        def_bool n
+endif # USB_DEVICE_NETWORK_ECM
+
+if !USB_DEVICE_NETWORK_ECM
+config ETH_MCUX_0
+        def_bool y
+endif # !USB_DEVICE_NETWORK_ECM
+endif # NET_L2_ETHERNET
 
 endif # NETWORKING
 

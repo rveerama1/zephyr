@@ -67,13 +67,6 @@ config SPI_MCUX_DSPI
 
 endif # SPI
 
-if NET_L2_ETHERNET
-
-config ETH_MCUX
-	def_bool y
-
-endif # NET_L2_ETHERNET
-
 if ENTROPY_GENERATOR
 
 config ENTROPY_MCUX_RNGA
@@ -101,5 +94,19 @@ config USB_KINETIS
 	def_bool y
 
 endif # USB
+
+if NET_L2_ETHERNET
+
+if USB_DEVICE_NETWORK_ECM
+config ETH_MCUX
+	def_bool n
+endif # USB_DEVICE_NETWORK_ECM
+
+if !USB_DEVICE_NETWORK_ECM
+config ETH_MCUX
+	def_bool y
+endif # !USB_DEVICE_NETWORK_ECM
+
+endif # NET_L2_ETHERNET
 
 endif # SOC_MK64F12

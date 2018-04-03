@@ -1,282 +1,198 @@
 /* main.c - Application main entry point */
 
 /*
- * Copyright (c) 2015-2016 Intel Corporation
+ * Copyright (c) 2017 Intel Corporation
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr/types.h>
-#include <stddef.h>
-#include <string.h>
-#include <errno.h>
 #include <misc/printk.h>
-#include <misc/byteorder.h>
-#include <zephyr.h>
 
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <bluetooth/mesh.h>
 
-#include <gatt/hrs.h>
-#include <gatt/dis.h>
-#include <gatt/bas.h>
-#include <gatt/cts.h>
+#include "rpl.h"
 
-#define DEVICE_NAME		CONFIG_BT_DEVICE_NAME
-#define DEVICE_NAME_LEN		(sizeof(DEVICE_NAME) - 1)
+#define COMP_ID 0x0002
 
-/* Custom Service Variables */
-static struct bt_uuid_128 vnd_uuid = BT_UUID_INIT_128(
-	0xf0, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
-	0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
+#define MOD_LF 0x0000
 
-static struct bt_uuid_128 vnd_enc_uuid = BT_UUID_INIT_128(
-	0xf1, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
-	0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
+#define NODE_ADDR 0x0001
+#define GROUP_ADDR 0xc000
 
-static struct bt_uuid_128 vnd_auth_uuid = BT_UUID_INIT_128(
-	0xf2, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
-	0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
+#define OP_VENDOR_BUTTON BT_MESH_MODEL_OP_3(0x00, COMP_ID)
 
-static u8_t vnd_value[] = { 'V', 'e', 'n', 'd', 'o', 'r' };
+static const u8_t net_key[16] = {
+	0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+	0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+};
+static const u8_t dev_key[16] = {
+	0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+	0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+};
+static const u8_t app_key[16] = {
+	0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+	0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+};
+static const u16_t net_idx;
+static const u16_t app_idx;
+static const u32_t iv_index;
+static u8_t flags;
 
-static ssize_t read_vnd(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-			void *buf, u16_t len, u16_t offset)
-{
-	const char *value = attr->user_data;
+static struct bt_mesh_cfg_srv cfg_srv = {
+	.relay = BT_MESH_RELAY_ENABLED,
+	.beacon = BT_MESH_BEACON_ENABLED,
+	.frnd = BT_MESH_FRIEND_NOT_SUPPORTED,
+	.default_ttl = 7,
 
-	return bt_gatt_attr_read(conn, attr, buf, len, offset, value,
-				 strlen(value));
-}
-
-static ssize_t write_vnd(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-			 const void *buf, u16_t len, u16_t offset,
-			 u8_t flags)
-{
-	u8_t *value = attr->user_data;
-
-	if (offset + len > sizeof(vnd_value)) {
-		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
-	}
-
-	memcpy(value + offset, buf, len);
-
-	return len;
-}
-
-static struct bt_gatt_ccc_cfg vnd_ccc_cfg[BT_GATT_CCC_MAX] = {};
-static u8_t simulate_vnd;
-static u8_t indicating;
-static struct bt_gatt_indicate_params ind_params;
-
-static void vnd_ccc_cfg_changed(const struct bt_gatt_attr *attr, u16_t value)
-{
-	simulate_vnd = (value == BT_GATT_CCC_INDICATE) ? 1 : 0;
-}
-
-static void indicate_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-			u8_t err)
-{
-	printk("Indication %s\n", err != 0 ? "fail" : "success");
-	indicating = 0;
-}
-
-#define MAX_DATA 74
-static u8_t vnd_long_value[] = {
-		  'V', 'e', 'n', 'd', 'o', 'r', ' ', 'd', 'a', 't', 'a', '1',
-		  'V', 'e', 'n', 'd', 'o', 'r', ' ', 'd', 'a', 't', 'a', '2',
-		  'V', 'e', 'n', 'd', 'o', 'r', ' ', 'd', 'a', 't', 'a', '3',
-		  'V', 'e', 'n', 'd', 'o', 'r', ' ', 'd', 'a', 't', 'a', '4',
-		  'V', 'e', 'n', 'd', 'o', 'r', ' ', 'd', 'a', 't', 'a', '5',
-		  'V', 'e', 'n', 'd', 'o', 'r', ' ', 'd', 'a', 't', 'a', '6',
-		  '.', ' ' };
-
-static ssize_t read_long_vnd(struct bt_conn *conn,
-			     const struct bt_gatt_attr *attr, void *buf,
-			     u16_t len, u16_t offset)
-{
-	const char *value = attr->user_data;
-
-	return bt_gatt_attr_read(conn, attr, buf, len, offset, value,
-				 sizeof(vnd_long_value));
-}
-
-static ssize_t write_long_vnd(struct bt_conn *conn,
-			      const struct bt_gatt_attr *attr, const void *buf,
-			      u16_t len, u16_t offset, u8_t flags)
-{
-	u8_t *value = attr->user_data;
-
-	if (flags & BT_GATT_WRITE_FLAG_PREPARE) {
-		return 0;
-	}
-
-	if (offset + len > sizeof(vnd_long_value)) {
-		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
-	}
-
-	memcpy(value + offset, buf, len);
-
-	return len;
-}
-
-static const struct bt_uuid_128 vnd_long_uuid = BT_UUID_INIT_128(
-	0xf3, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
-	0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
-
-static struct bt_gatt_cep vnd_long_cep = {
-	.properties = BT_GATT_CEP_RELIABLE_WRITE,
+	/* 3 transmissions with 20ms interval */
+	.net_transmit = BT_MESH_TRANSMIT(2, 20),
+	.relay_retransmit = BT_MESH_TRANSMIT(3, 20),
 };
 
-static int signed_value;
+static struct bt_mesh_cfg_cli cfg_cli = {
+};
 
-static ssize_t read_signed(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-			   void *buf, u16_t len, u16_t offset)
+static void attention_on(struct bt_mesh_model *model)
 {
-	const char *value = attr->user_data;
-
-	return bt_gatt_attr_read(conn, attr, buf, len, offset, value,
-				 sizeof(signed_value));
+	printk("attention_on()\n");
 }
 
-static ssize_t write_signed(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-			    const void *buf, u16_t len, u16_t offset,
-			    u8_t flags)
+static void attention_off(struct bt_mesh_model *model)
 {
-	u8_t *value = attr->user_data;
+	printk("attention_off()\n");
+}
 
-	if (offset + len > sizeof(signed_value)) {
-		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+static const struct bt_mesh_health_srv_cb health_srv_cb = {
+	.attn_on = attention_on,
+	.attn_off = attention_off,
+};
+
+static struct bt_mesh_health_srv health_srv = {
+	.cb = &health_srv_cb,
+};
+
+BT_MESH_HEALTH_PUB_DEFINE(health_pub, 0);
+
+static struct bt_mesh_model sig_models[] = {
+	BT_MESH_MODEL_CFG_SRV(&cfg_srv),
+	BT_MESH_MODEL_CFG_CLI(&cfg_cli),
+	BT_MESH_MODEL_HEALTH_SRV(&health_srv, &health_pub),
+};
+
+static void vnd_button_pressed(struct bt_mesh_model *model,
+			       struct bt_mesh_msg_ctx *ctx,
+			       struct net_buf_simple *buf)
+{
+	printk("Message 0x%04x -> 0x%04x\n", ctx->addr, model->elem->addr);
+
+	ble_to_rpl(ctx->addr, model->elem->addr);
+}
+
+static const struct bt_mesh_model_op vnd_ops[] = {
+	{ OP_VENDOR_BUTTON, 0, vnd_button_pressed },
+	BT_MESH_MODEL_OP_END,
+};
+
+static struct bt_mesh_model vnd1_models[] = {
+	BT_MESH_MODEL_VND(COMP_ID, MOD_LF, vnd_ops, NULL, NULL),
+};
+
+static struct bt_mesh_model vnd2_models[] = {
+	BT_MESH_MODEL_VND(COMP_ID, MOD_LF, vnd_ops, NULL, NULL),
+};
+
+static struct bt_mesh_model vnd3_models[] = {
+	BT_MESH_MODEL_VND(COMP_ID, MOD_LF, vnd_ops, NULL, NULL),
+};
+
+static struct bt_mesh_model vnd4_models[] = {
+	BT_MESH_MODEL_VND(COMP_ID, MOD_LF, vnd_ops, NULL, NULL),
+};
+
+static struct bt_mesh_elem elements[] = {
+	BT_MESH_ELEM(0, sig_models, vnd1_models),
+	BT_MESH_ELEM(0, BT_MESH_MODEL_NONE, vnd2_models),
+	BT_MESH_ELEM(0, BT_MESH_MODEL_NONE, vnd3_models),
+	BT_MESH_ELEM(0, BT_MESH_MODEL_NONE, vnd4_models),
+};
+
+static const struct bt_mesh_comp comp = {
+	.cid = COMP_ID,
+	.elem = elements,
+	.elem_count = ARRAY_SIZE(elements),
+};
+
+int rpl_to_ble(u16_t src, u16_t dst)
+{
+	struct bt_mesh_model *model;
+	NET_BUF_SIMPLE_DEFINE(msg, 3 + 4);
+	struct bt_mesh_msg_ctx ctx = {
+		.net_idx = net_idx,
+		.app_idx = app_idx,
+		.addr = dst,
+		.send_ttl = BT_MESH_TTL_DEFAULT,
+	};
+
+	printk("src 0x%04x dst 0x%04x\n", src, dst);
+
+	if (src >= ARRAY_SIZE(elements)) {
+		return -EINVAL;
 	}
 
-	memcpy(value + offset, buf, len);
+	model = &elements[src].vnd_models[0];
 
-	return len;
-}
+	/* Bind to Health model */
+	bt_mesh_model_msg_init(&msg, OP_VENDOR_BUTTON);
 
-static const struct bt_uuid_128 vnd_signed_uuid = BT_UUID_INIT_128(
-	0xf3, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x13,
-	0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x13);
-
-/* Vendor Primary Service Declaration */
-static struct bt_gatt_attr vnd_attrs[] = {
-	/* Vendor Primary Service Declaration */
-	BT_GATT_PRIMARY_SERVICE(&vnd_uuid),
-	BT_GATT_CHARACTERISTIC(&vnd_enc_uuid.uuid,
-			       BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE |
-			       BT_GATT_CHRC_INDICATE),
-	BT_GATT_DESCRIPTOR(&vnd_enc_uuid.uuid,
-			   BT_GATT_PERM_READ_ENCRYPT |
-			   BT_GATT_PERM_WRITE_ENCRYPT,
-			   read_vnd, write_vnd, vnd_value),
-	BT_GATT_CCC(vnd_ccc_cfg, vnd_ccc_cfg_changed),
-	BT_GATT_CHARACTERISTIC(&vnd_auth_uuid.uuid,
-			       BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE),
-	BT_GATT_DESCRIPTOR(&vnd_auth_uuid.uuid,
-			   BT_GATT_PERM_READ_AUTHEN |
-			   BT_GATT_PERM_WRITE_AUTHEN,
-			   read_vnd, write_vnd, vnd_value),
-	BT_GATT_CHARACTERISTIC(&vnd_long_uuid.uuid, BT_GATT_CHRC_READ |
-			       BT_GATT_CHRC_WRITE | BT_GATT_CHRC_EXT_PROP),
-	BT_GATT_DESCRIPTOR(&vnd_long_uuid.uuid,
-			   BT_GATT_PERM_READ | BT_GATT_PERM_WRITE |
-			   BT_GATT_PERM_PREPARE_WRITE,
-			   read_long_vnd, write_long_vnd, &vnd_long_value),
-	BT_GATT_CEP(&vnd_long_cep),
-	BT_GATT_CHARACTERISTIC(&vnd_signed_uuid.uuid, BT_GATT_CHRC_READ |
-			       BT_GATT_CHRC_WRITE | BT_GATT_CHRC_AUTH),
-	BT_GATT_DESCRIPTOR(&vnd_signed_uuid.uuid,
-			   BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
-			   read_signed, write_signed, &signed_value),
-};
-
-static struct bt_gatt_service vnd_svc = BT_GATT_SERVICE(vnd_attrs);
-
-static const struct bt_data ad[] = {
-	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-	BT_DATA_BYTES(BT_DATA_UUID16_ALL,
-		      0x0d, 0x18, 0x0f, 0x18, 0x05, 0x18),
-	BT_DATA_BYTES(BT_DATA_UUID128_ALL,
-		      0xf0, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
-		      0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12),
-};
-
-static const struct bt_data sd[] = {
-	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
-};
-
-static void connected(struct bt_conn *conn, u8_t err)
-{
-	if (err) {
-		printk("Connection failed (err %u)\n", err);
-	} else {
-		printk("Connected\n");
-	}
-}
-
-static void disconnected(struct bt_conn *conn, u8_t reason)
-{
-	printk("Disconnected (reason %u)\n", reason);
-}
-
-static struct bt_conn_cb conn_callbacks = {
-	.connected = connected,
-	.disconnected = disconnected,
-};
-
-static void bt_ready(int err)
-{
-	if (err) {
-		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+	if (bt_mesh_model_send(model, &ctx, &msg, NULL, NULL)) {
+		printk("Unable to send Vendor Button message\n");
+		return -EIO;
 	}
 
-	printk("Bluetooth initialized\n");
+	printk("Button message sent with OpCode 0x%08x\n", OP_VENDOR_BUTTON);
 
-	hrs_init(0x01);
-	bas_init();
-	cts_init();
-	dis_init(CONFIG_SOC, "Manufacturer");
-	bt_gatt_service_register(&vnd_svc);
-
-	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
-			      sd, ARRAY_SIZE(sd));
-	if (err) {
-		printk("Advertising failed to start (err %d)\n", err);
-		return;
-	}
-
-	printk("Advertising successfully started\n");
+	return 0;
 }
 
-static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
+static void configure(u16_t addr)
 {
-	char addr[BT_ADDR_LE_STR_LEN];
+	u8_t status;
 
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+	/* Add Application Key */
+	bt_mesh_cfg_app_key_add(net_idx, addr, net_idx, app_idx, app_key,
+				&status);
 
-	printk("Passkey for %s: %06u\n", addr, passkey);
+	/* Bind to vendor model */
+	bt_mesh_cfg_mod_app_bind_vnd(net_idx, addr, addr, app_idx,
+				     MOD_LF, COMP_ID, &status);
+	bt_mesh_cfg_mod_app_bind_vnd(net_idx, addr, addr + 1, app_idx,
+				     MOD_LF, COMP_ID, &status);
+	bt_mesh_cfg_mod_app_bind_vnd(net_idx, addr, addr + 2, app_idx,
+				     MOD_LF, COMP_ID, &status);
+	bt_mesh_cfg_mod_app_bind_vnd(net_idx, addr, addr + 3, app_idx,
+				     MOD_LF, COMP_ID, &status);
+
+	/* Bind to Health model */
+	bt_mesh_cfg_mod_app_bind(net_idx, addr, addr, app_idx,
+				 BT_MESH_MODEL_ID_HEALTH_SRV, &status);
+
+	/* Add model subscription */
+	bt_mesh_cfg_mod_sub_add_vnd(net_idx, addr, addr, GROUP_ADDR,
+				    MOD_LF, COMP_ID, &status);
+	bt_mesh_cfg_mod_sub_add_vnd(net_idx, addr, addr + 1, GROUP_ADDR,
+				    MOD_LF, COMP_ID, &status);
+	bt_mesh_cfg_mod_sub_add_vnd(net_idx, addr, addr + 2, GROUP_ADDR,
+				    MOD_LF, COMP_ID, &status);
+	bt_mesh_cfg_mod_sub_add_vnd(net_idx, addr, addr + 3, GROUP_ADDR,
+				    MOD_LF, COMP_ID, &status);
 }
 
-static void auth_cancel(struct bt_conn *conn)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
+static const u8_t dev_uuid[16] = { 0xdd, 0xdd };
 
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	printk("Pairing cancelled: %s\n", addr);
-}
-
-static struct bt_conn_auth_cb auth_cb_display = {
-	.passkey_display = auth_passkey_display,
-	.passkey_entry = NULL,
-	.cancel = auth_cancel,
+static const struct bt_mesh_prov prov = {
+	.uuid = dev_uuid,
 };
-
-static void init_rpl_node(void);
 
 void main(void)
 {
@@ -289,44 +205,33 @@ void main(void)
 
 	printk("Initializing Bluetooth...\n");
 
-	err = bt_enable(bt_ready);
+	/* Initialize the Bluetooth Subsystem */
+	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
 		return;
 	}
 
-	bt_conn_cb_register(&conn_callbacks);
-	bt_conn_auth_cb_register(&auth_cb_display);
+	printk("Bluetooth initialized\n");
 
-	/* Implement notification. At the moment there is no suitable way
-	 * of starting delayed work so we do it here
-	 */
-	while (1) {
-		k_sleep(MSEC_PER_SEC);
-
-		/* Current Time Service updates only when time is changed */
-		cts_notify();
-
-		/* Heartrate measurements simulation */
-		hrs_notify();
-
-		/* Battery level simulation */
-		bas_notify();
-
-		/* Vendor indication simulation */
-		if (simulate_vnd) {
-			if (indicating) {
-				continue;
-			}
-
-			ind_params.attr = &vnd_attrs[2];
-			ind_params.func = indicate_cb;
-			ind_params.data = &indicating;
-			ind_params.len = sizeof(indicating);
-
-			if (bt_gatt_indicate(NULL, &ind_params) == 0) {
-				indicating = 1;
-			}
-		}
+	err = bt_mesh_init(&prov, &comp);
+	if (err) {
+		printk("Initializing mesh failed (err %d)\n", err);
+		return;
 	}
+
+	printk("Mesh initialized\n");
+
+	err = bt_mesh_provision(net_key, net_idx, flags, iv_index, 0,
+				NODE_ADDR, dev_key);
+	if (err) {
+		printk("Provisioning failed (err %d)\n", err);
+		return;
+	}
+
+	printk("Provisioning completed, configuring...\n");
+
+	configure(NODE_ADDR);
+
+	printk("Configuring complete\n");
 }

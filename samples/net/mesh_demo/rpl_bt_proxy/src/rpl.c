@@ -27,6 +27,8 @@
 #include <net/coap.h>
 #include <net/coap_link_format.h>
 
+#include "rpl.h"
+
 #define MY_COAP_PORT 5683
 
 #define ALL_NODES_LOCAL_COAP_MCAST					\
@@ -1300,6 +1302,12 @@ static bool join_coap_multicast_group(void)
 	}
 
 	return true;
+}
+
+int ble_to_rpl(u16_t src, u16_t dst)
+{
+	/* FIXME: add implementation */
+	return 0;
 }
 
 void init_rpl_node(void)

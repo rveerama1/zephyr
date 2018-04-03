@@ -3,10 +3,6 @@ project(NONE)
 
 target_sources(app PRIVATE
   src/main.c
-  src/hrs.c
-  src/dis.c
-  src/bas.c
-  src/cts.c
   src/rpl.c
 )
 

@@ -7,289 +7,140 @@
 #include <zephyr.h>
 #include <errno.h>
 #include <board.h>
+#include <gpio.h>
 
-#include <misc/byteorder.h>
 #include <net/net_core.h>
 #include <net/net_ip.h>
 #include <net/net_pkt.h>
 #include <net/net_context.h>
 #include <net/udp.h>
+#include <net/coap.h>
 
 #include <net_private.h>
 #include <rpl.h>
-#include <icmpv6.h>
-#include <6lo.h>
-#include <ipv6.h>
-#include <rpl.h>
-
-#include <gpio.h>
-
-#include <net/coap.h>
-#include <net/coap_link_format.h>
 
 #include "rpl.h"
 
 #define MY_COAP_PORT 5683
+#define PEER_COAP_PORT 0xABC0
 
 #define ALL_NODES_LOCAL_COAP_MCAST					\
 	{ { { 0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xfd } } }
-
-#if defined(LED0_GPIO_PORT)
-#define LED_GPIO_NAME LED0_GPIO_PORT
-#define LED_PIN LED0_GPIO_PIN
-#else
-#define LED_GPIO_NAME "(fail)"
-#define LED_PIN 0
-#endif
 
 #define RPL_MAX_REPLY 75
 
 #define PKT_WAIT_TIME K_SECONDS(1)
 
 static struct net_context *context;
-static struct device *led0;
-static const u8_t plain_text_format;
 
-/* LED */
-static const char led_on[] = "LED0 ON";
-static const char led_off[] = "LED0 OFF";
-static const char led_toggle_on[] = "LED Toggle ON";
-static const char led_toggle_off[] = "LED Toggle OFF";
+static const char * const uri_path[] = { "led", NULL };
 
-static bool fake_led;
-
-/* RPL */
-static const char rpl_parent[] = "RPL Parent:";
-static const char rpl_no_parent[] = "No parent yet";
-
-static const char rpl_rank[] = "RPL Rank:";
-static const char rpl_no_rank[] = "No rank yet";
-
-static const char rpl_link[] = "Link Metric:";
-static const char rpl_no_link[] = "No link metric yet";
-
-static const char ipv6_no_nbr[] = "No IPv6 Neighbors";
-
-#define NUM_OBSERVERS 3
-#define NUM_PENDINGS 3
-
-static struct coap_observer observers[NUM_OBSERVERS];
-static struct coap_pending pendings[NUM_PENDINGS];
-
-static struct k_delayed_work retransmit_work;
-
-static void get_from_ip_addr(struct coap_packet *cpkt,
-			     struct sockaddr_in6 *from)
+static bool send_coap_request(const struct sockaddr_in6 *peer, u16_t id,
+			      u8_t src, u8_t dst)
 {
-	struct net_udp_hdr hdr, *udp_hdr;
-
-	udp_hdr = net_udp_get_hdr(cpkt->pkt, &hdr);
-	if (!udp_hdr) {
-		return;
-	}
-
-	net_ipaddr_copy(&from->sin6_addr, &NET_IPV6_HDR(cpkt->pkt)->src);
-	from->sin6_port = udp_hdr->src_port;
-	from->sin6_family = AF_INET6;
-}
-
-static void send_error_response(struct coap_resource *resource,
-				struct coap_packet *request,
-				struct sockaddr_in6 *from)
-{
-	struct net_context *context;
-	struct coap_packet response;
 	struct net_pkt *pkt;
 	struct net_buf *frag;
-	u16_t id;
+	struct coap_packet request;
+	const char * const *p;
 	int r;
-
-	id = coap_header_get_id(request);
-	context = net_pkt_context(request->pkt);
 
 	pkt = net_pkt_get_tx(context, PKT_WAIT_TIME);
 	if (!pkt) {
-		return;
+		NET_ERR("Ran out of network packets");
+		return false;
 	}
 
 	frag = net_pkt_get_data(context, PKT_WAIT_TIME);
 	if (!frag) {
-		net_pkt_unref(pkt);
-		return;
+		NET_ERR("Ran out of network buffers");
+		goto end;
 	}
 
 	net_pkt_frag_add(pkt, frag);
 
-	r = coap_packet_init(&response, pkt, 1, COAP_TYPE_ACK,
-			     0, NULL, COAP_RESPONSE_CODE_BAD_REQUEST, id);
+	r = coap_packet_init(&request, pkt, 1, COAP_TYPE_NON_CON,
+			     0, NULL, COAP_METHOD_POST, id);
+	if (r < 0) {
+		NET_ERR("Failed to initialize CoAP packet");
+		goto end;
+	}
+
+	for (p = uri_path; p && *p; p++) {
+		r = coap_packet_append_option(&request, COAP_OPTION_URI_PATH,
+					      *p, strlen(*p));
+		if (r < 0) {
+			NET_ERR("Unable add option to request.\n");
+			goto end;
+		}
+	}
+
+	r = coap_packet_append_payload_marker(&request);
 	if (r < 0) {
 		net_pkt_unref(pkt);
-		return;
-	}
-
-	r = net_context_sendto(pkt, (const struct sockaddr *)from,
-			       sizeof(struct sockaddr_in6),
-			       NULL, 0, NULL, NULL);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-	}
-}
-
-static int well_known_core_get(struct coap_resource *resource,
-			      struct coap_packet *request)
-{
-	struct coap_packet response;
-	struct sockaddr_in6 from;
-	struct net_pkt *pkt;
-	struct net_buf *frag;
-	int r;
-
-	NET_DBG("");
-
-	pkt = net_pkt_get_tx(context, K_FOREVER);
-	if (!pkt) {
-		return -ENOMEM;
-	}
-
-	frag = net_pkt_get_data(context, K_FOREVER);
-	if (!frag) {
-		net_pkt_unref(pkt);
-		return -ENOMEM;
-	}
-
-	net_pkt_frag_add(pkt, frag);
-
-	r = coap_well_known_core_get(resource, request, &response, pkt);
-	if (r < 0) {
-		net_pkt_unref(response.pkt);
-		send_error_response(resource, request, &from);
-
-		return r;
-	}
-
-	get_from_ip_addr(request, &from);
-
-	r = net_context_sendto(response.pkt, (const struct sockaddr *)&from,
-			       sizeof(struct sockaddr_in6),
-			       NULL, 0, NULL, NULL);
-	if (r < 0) {
-		net_pkt_unref(response.pkt);
-	}
-
-	return r;
-}
-
-static bool read_led(void)
-{
-	u32_t led = 0;
-	int r;
-
-	if (!led0) {
-		return fake_led;
-	}
-
-	r = gpio_pin_read(led0, LED_PIN, &led);
-	if (r < 0) {
 		return false;
 	}
 
-	return led;
-}
-
-static void write_led(bool led)
-{
-	if (!led0) {
-		fake_led = led;
-		return;
-	}
-
-	gpio_pin_write(led0, LED_PIN, led);
-}
-
-static int led_get(struct coap_resource *resource,
-		   struct coap_packet *request)
-{
-	struct net_pkt *pkt;
-	struct net_buf *frag;
-	struct sockaddr_in6 from;
-	struct coap_packet response;
-	const char *str;
-	u16_t len, id;
-	int r;
-
-	NET_DBG("");
-
-	id = coap_header_get_id(request);
-
-	pkt = net_pkt_get_tx(context, K_FOREVER);
-	if (!pkt) {
-		return -ENOMEM;
-	}
-
-	frag = net_pkt_get_data(context, K_FOREVER);
-	if (!frag) {
-		net_pkt_unref(pkt);
-		return -ENOMEM;
-	}
-
-	net_pkt_frag_add(pkt, frag);
-
-	r = coap_packet_init(&response, pkt, 1, COAP_TYPE_ACK,
-			     0, NULL, COAP_RESPONSE_CODE_CONTENT, id);
+	/* Append SRC id */
+	r = coap_packet_append_payload(&request, &src, 1);
 	if (r < 0) {
 		net_pkt_unref(pkt);
-		return -EINVAL;
+		return false;
 	}
 
-	if (read_led()) {
-		str = led_on;
-		len = sizeof(led_on);
-	} else {
-		str = led_off;
-		len = sizeof(led_off);
-	}
-
-	r = coap_packet_append_payload_marker(&response);
+	/* Append DST id */
+	r = coap_packet_append_payload(&request, &dst, 1);
 	if (r < 0) {
 		net_pkt_unref(pkt);
-		return -EINVAL;
+		return false;
 	}
 
-	r = coap_packet_append_payload(&response, (u8_t *)str, len);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	get_from_ip_addr(request, &from);
-	r = net_context_sendto(pkt, (const struct sockaddr *)&from,
+	r = net_context_sendto(pkt, (const struct sockaddr *)peer,
 			       sizeof(struct sockaddr_in6),
 			       NULL, 0, NULL, NULL);
 	if (r < 0) {
-		net_pkt_unref(pkt);
+		NET_ERR("Cannot send data to peer (%d)", r);
+		goto end;
 	}
 
-	return r;
+	return true;
+
+end:
+	net_pkt_unref(pkt);
+	return false;
+}
+
+int ble_to_rpl(u16_t src, u16_t dst)
+{
+	struct net_rpl_instance *rpl;
+	struct sockaddr_in6 peer;
+	struct in6_addr *parent = NULL;
+
+	rpl = net_rpl_get_default_instance();
+	if (rpl && rpl->current_dag && rpl->current_dag->preferred_parent) {
+		parent = net_rpl_get_parent_addr(net_if_get_default(),
+					 rpl->current_dag->preferred_parent);
+		if (!parent) {
+			NET_DBG("Can not send CoAP req to RPL BR");
+			return -EINVAL;
+		}
+	}
+
+	peer.sin6_family = AF_INET6;
+	peer.sin6_port = PEER_COAP_PORT;
+	net_ipaddr_copy(&peer.sin6_addr, parent);
+
+	return send_coap_request(&peer, coap_next_id(), src, dst);
 }
 
 static int led_post(struct coap_resource *resource,
 		    struct coap_packet *request)
 {
-	struct net_pkt *pkt;
 	struct net_buf *frag;
-	struct sockaddr_in6 from;
-	struct coap_packet response;
-	const char *str;
 	u16_t offset;
-	u16_t len;
-	u16_t id;
-	u32_t led;
-	u8_t payload;
-	int r;
+	u8_t src;
+	u8_t dst;
 
 	NET_DBG("");
-
-	led = 0;
 
 	frag = net_frag_skip(request->frag, request->offset, &offset,
 			     request->hdr_len + request->opt_len);
@@ -297,960 +148,31 @@ static int led_post(struct coap_resource *resource,
 		return -EINVAL;
 	}
 
-	frag = net_frag_read_u8(frag, offset, &offset, &payload);
+	frag = net_frag_read_u8(frag, offset, &offset, &src);
 	if (!frag && offset == 0xffff) {
-		printk("packet without payload, so toggle the led");
-
-		led = read_led();
-		led = !led;
-	} else {
-		if (payload == 0x31) {
-			led = 1;
-		}
+		NET_ERR("packet without payload");
 	}
 
-	write_led(led);
-
-	id = coap_header_get_id(request);
-
-	pkt = net_pkt_get_tx(context, K_FOREVER);
-	if (!pkt) {
-		return -ENOMEM;
-	}
-
-	frag = net_pkt_get_data(context, K_FOREVER);
-	if (!frag) {
-		net_pkt_unref(pkt);
-		return -ENOMEM;
-	}
-
-	net_pkt_frag_add(pkt, frag);
-
-	r = coap_packet_init(&response, pkt, 1, COAP_TYPE_ACK,
-			     0, NULL, COAP_RESPONSE_CODE_CONTENT, id);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	if (led) {
-		str = led_toggle_on;
-		len = sizeof(led_toggle_on);
-	} else {
-		str = led_toggle_off;
-		len = sizeof(led_toggle_off);
-	}
-
-	r = coap_packet_append_payload_marker(&response);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_payload(&response, (u8_t *)str, len);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	get_from_ip_addr(request, &from);
-	r = net_context_sendto(pkt, (const struct sockaddr *)&from,
-			       sizeof(struct sockaddr_in6),
-			       NULL, 0, NULL, NULL);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-	}
-
-	return r;
-}
-
-static int led_put(struct coap_resource *resource,
-		   struct coap_packet *request)
-{
-	struct net_pkt *pkt;
-	struct net_buf *frag;
-	struct sockaddr_in6 from;
-	struct coap_packet response;
-	const char *str;
-	u16_t offset;
-	u16_t len;
-	u16_t id;
-	u32_t led;
-	u8_t payload;
-	int r;
-
-	NET_DBG("");
-
-	led = 0;
-
-	frag = net_frag_skip(request->frag, request->offset, &offset,
-			     request->hdr_len + request->opt_len);
+	frag = net_frag_read_u8(frag, offset, &offset, &dst);
 	if (!frag && offset == 0xffff) {
-		return -EINVAL;
+		NET_ERR("packet without payload");
 	}
 
-	frag = net_frag_read_u8(frag, offset, &offset, &payload);
-	if (!frag && offset == 0xffff) {
-		printk("packet without payload, so toggle the led");
+	NET_DBG("Toggle the Device %d from %d", src, dst);
 
-		led = read_led();
-		led = !led;
-	} else {
-		if (payload == 0x31) {
-			led = 1;
-		}
-	}
+	rpl_to_ble(src, dst);
 
-	write_led(led);
-
-	id = coap_header_get_id(request);
-
-	pkt = net_pkt_get_tx(context, K_FOREVER);
-	if (!pkt) {
-		return -ENOMEM;
-	}
-
-	frag = net_pkt_get_data(context, K_FOREVER);
-	if (!frag) {
-		net_pkt_unref(pkt);
-		return -ENOMEM;
-	}
-
-	net_pkt_frag_add(pkt, frag);
-
-	r = coap_packet_init(&response, pkt, 1, COAP_TYPE_ACK,
-			     0, NULL, COAP_RESPONSE_CODE_CHANGED, id);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	if (led) {
-		str = led_on;
-		len = sizeof(led_on);
-	} else {
-		str = led_off;
-		len = sizeof(led_off);
-	}
-
-	r = coap_packet_append_payload_marker(&response);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_payload(&response, (u8_t *)str, len);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	get_from_ip_addr(request, &from);
-	r = net_context_sendto(pkt, (const struct sockaddr *)&from,
-			       sizeof(struct sockaddr_in6),
-			       NULL, 0, NULL, NULL);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-	}
-
-	return r;
+	return 0;
 }
 
-struct ipv6_nbr_str {
-	char str[(sizeof("xx:xx:xx:xx:xx:xx:xx:xx") *
-		  CONFIG_NET_IPV6_MAX_NEIGHBORS) +
-		  CONFIG_NET_IPV6_MAX_NEIGHBORS];
-	u8_t len;
-};
-
-static void ipv6_nbr_cb(struct net_nbr *nbr, void *user_data)
-{
-	struct ipv6_nbr_str *nbr_str = user_data;
-	char temp[sizeof("xx:xx:xx:xx:xx:xx:xx:xx") + sizeof("\n")];
-
-	snprintk(temp, sizeof(temp), "%s\n",
-		 net_sprint_ipv6_addr(&net_ipv6_nbr_data(nbr)->addr));
-
-	memcpy(nbr_str->str + nbr_str->len, temp, strlen(temp));
-	nbr_str->len += strlen(temp);
-}
-
-/* IPv6 Neighbors */
-static int ipv6_neighbors_get(struct coap_resource *resource,
-			      struct coap_packet *request)
-{
-	struct net_pkt *pkt;
-	struct net_buf *frag;
-	struct sockaddr_in6 from;
-	struct coap_packet response;
-	struct ipv6_nbr_str nbr_str;
-	u8_t token[8];
-	const char *str;
-	u16_t len, id;
-	u8_t tkl;
-	int r;
-
-	NET_DBG("");
-
-	id = coap_header_get_id(request);
-	tkl = coap_header_get_token(request, (u8_t *)token);
-
-	pkt = net_pkt_get_tx(context, K_FOREVER);
-	if (!pkt) {
-		return -ENOMEM;
-	}
-
-	frag = net_pkt_get_data(context, K_FOREVER);
-	if (!frag) {
-		net_pkt_unref(pkt);
-		return -ENOMEM;
-	}
-
-	net_pkt_frag_add(pkt, frag);
-
-	r = coap_packet_init(&response, pkt, 1, COAP_TYPE_ACK,
-			     tkl, token, COAP_RESPONSE_CODE_CONTENT, id);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_option(&response, COAP_OPTION_CONTENT_FORMAT,
-				      &plain_text_format,
-				      sizeof(plain_text_format));
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	nbr_str.len = 0;
-	net_ipv6_nbr_foreach(ipv6_nbr_cb, &nbr_str);
-
-	if (nbr_str.len) {
-		str = nbr_str.str;
-		len = nbr_str.len;
-	} else {
-		str = ipv6_no_nbr;
-		len = strlen(ipv6_no_nbr);
-	}
-
-	r = coap_packet_append_payload_marker(&response);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_payload(&response, (u8_t *)str, len);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	get_from_ip_addr(request, &from);
-	r = net_context_sendto(pkt, (const struct sockaddr *)&from,
-			       sizeof(struct sockaddr_in6),
-			       NULL, 0, NULL, NULL);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-	}
-
-	return r;
-}
-
-/* RPL Information */
-static int rpl_info_get(struct coap_resource *resource,
-			struct coap_packet *request)
-{
-	struct net_rpl_instance *rpl;
-	struct net_pkt *pkt;
-	struct net_buf *frag;
-	struct sockaddr_in6 from;
-	struct coap_packet response;
-	struct in6_addr *parent;
-	struct net_nbr *nbr;
-	const char *str;
-	u8_t token[8];
-	u16_t len, id;
-	u16_t out_len;
-	u8_t tkl;
-	int r;
-	char out[RPL_MAX_REPLY];
-
-	NET_DBG("");
-
-	id = coap_header_get_id(request);
-	tkl = coap_header_get_token(request, (u8_t *)token);
-
-	pkt = net_pkt_get_tx(context, K_FOREVER);
-	if (!pkt) {
-		net_pkt_unref(pkt);
-		return -ENOMEM;
-	}
-
-	frag = net_pkt_get_data(context, K_FOREVER);
-	if (!frag) {
-		net_pkt_unref(pkt);
-		return -ENOMEM;
-	}
-
-	net_pkt_frag_add(pkt, frag);
-
-	r = coap_packet_init(&response, pkt, 1, COAP_TYPE_ACK,
-			     tkl, token, COAP_RESPONSE_CODE_CONTENT, id);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_option(&response, COAP_OPTION_CONTENT_FORMAT,
-				      &plain_text_format,
-				      sizeof(plain_text_format));
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	rpl = net_rpl_get_default_instance();
-	if (rpl && rpl->current_dag && rpl->current_dag->preferred_parent) {
-		nbr = net_rpl_get_nbr(rpl->current_dag->preferred_parent);
-	} else {
-		nbr = NULL;
-	}
-
-	/* Write all RPL info in JSON format */
-	snprintk(out, sizeof(out) - 1, "parent-");
-	out_len = strlen(out);
-
-	if (!rpl || !rpl->current_dag || !rpl->current_dag->preferred_parent) {
-		snprintk(&out[out_len], sizeof(out) - out_len - 1, "None");
-	} else {
-		parent = net_rpl_get_parent_addr(net_pkt_iface(pkt),
-					rpl->current_dag->preferred_parent);
-		snprintk(&out[out_len], sizeof(out) - out_len - 1, "%s",
-			 net_sprint_ipv6_addr(parent));
-	}
-
-	out_len = strlen(out);
-
-	snprintk(&out[out_len], sizeof(out) - out_len - 1, "\nrank-");
-	out_len = strlen(out);
-
-	if (!rpl || !rpl->current_dag) {
-		snprintk(&out[out_len], sizeof(out) - out_len - 1, "inf");
-	} else {
-		snprintk(&out[out_len], sizeof(out) - out_len - 1, "%u.%02u",
-			 rpl->current_dag->rank / NET_RPL_MC_ETX_DIVISOR,
-			 (100 * (rpl->current_dag->rank %
-				 NET_RPL_MC_ETX_DIVISOR)) /
-			 NET_RPL_MC_ETX_DIVISOR);
-	}
-
-	out_len = strlen(out);
-
-	snprintk(&out[out_len], sizeof(out) - out_len - 1, "\nlinkmetric-");
-	out_len = strlen(out);
-
-	if (!nbr) {
-		snprintk(&out[out_len], sizeof(out) - out_len - 1, "inf");
-	} else {
-		snprintk(&out[out_len], sizeof(out) - out_len - 1, "%u.%02u",
-			 (net_ipv6_nbr_data(nbr)->link_metric) /
-			 NET_RPL_MC_ETX_DIVISOR,
-			 (100 * ((net_ipv6_nbr_data(nbr)->link_metric) %
-				 NET_RPL_MC_ETX_DIVISOR)) /
-			 NET_RPL_MC_ETX_DIVISOR);
-	}
-
-	out_len = strlen(out);
-
-	str = out;
-	len = out_len;
-
-	r = coap_packet_append_payload_marker(&response);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_payload(&response, (u8_t *)str, len);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	get_from_ip_addr(request, &from);
-	r = net_context_sendto(pkt, (const struct sockaddr *)&from,
-			       sizeof(struct sockaddr_in6),
-			       NULL, 0, NULL, NULL);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-	}
-
-	return r;
-}
-
-/* RPL Parent */
-static int rpl_parent_get(struct coap_resource *resource,
-			  struct coap_packet *request)
-{
-	struct net_rpl_instance *rpl;
-	struct net_pkt *pkt;
-	struct net_buf *frag;
-	struct sockaddr_in6 from;
-	struct coap_packet response;
-	struct in6_addr *parent;
-	const char *str;
-	u8_t token[8];
-	u16_t len, id;
-	u8_t tkl;
-	int r;
-	char out[RPL_MAX_REPLY];
-
-	NET_DBG("");
-
-	id = coap_header_get_id(request);
-	tkl = coap_header_get_token(request, (u8_t *)token);
-
-	pkt = net_pkt_get_tx(context, K_FOREVER);
-	if (!pkt) {
-		return -ENOMEM;
-	}
-
-	frag = net_pkt_get_data(context, K_FOREVER);
-	if (!frag) {
-		net_pkt_unref(pkt);
-		return -ENOMEM;
-	}
-
-	net_pkt_frag_add(pkt, frag);
-
-	r = coap_packet_init(&response, pkt, 1, COAP_TYPE_ACK,
-			     tkl, token, COAP_RESPONSE_CODE_CONTENT, id);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_option(&response, COAP_OPTION_CONTENT_FORMAT,
-				      &plain_text_format,
-				      sizeof(plain_text_format));
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	rpl = net_rpl_get_default_instance();
-	if (!rpl || !rpl->current_dag || !rpl->current_dag->preferred_parent) {
-		str = rpl_no_parent;
-		len = sizeof(rpl_no_parent);
-
-	} else {
-		parent = net_rpl_get_parent_addr(net_pkt_iface(pkt),
-					rpl->current_dag->preferred_parent);
-		snprintk(out, sizeof(out), "%s %s", rpl_parent,
-			 net_sprint_ipv6_addr(parent));
-		str = out;
-		len = strlen(out);
-	}
-
-	r = coap_packet_append_payload_marker(&response);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_payload(&response, (u8_t *)str, len);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	get_from_ip_addr(request, &from);
-	r = net_context_sendto(pkt, (const struct sockaddr *)&from,
-			       sizeof(struct sockaddr_in6),
-			       NULL, 0, NULL, NULL);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-	}
-
-	return r;
-}
-
-/* RPL Rank */
-static int rpl_rank_get(struct coap_resource *resource,
-			struct coap_packet *request)
-{
-	struct net_rpl_instance *rpl;
-	struct net_pkt *pkt;
-	struct net_buf *frag;
-	struct sockaddr_in6 from;
-	struct coap_packet response;
-	const char *str;
-	u8_t token[8];
-	u16_t len, id;
-	u8_t tkl;
-	int r;
-	char out[RPL_MAX_REPLY];
-
-	NET_DBG("");
-
-	id = coap_header_get_id(request);
-	tkl = coap_header_get_token(request, (u8_t *)token);
-
-	pkt = net_pkt_get_tx(context, K_FOREVER);
-	if (!pkt) {
-		return -ENOMEM;
-	}
-
-	frag = net_pkt_get_data(context, K_FOREVER);
-	if (!frag) {
-		net_pkt_unref(pkt);
-		return -ENOMEM;
-	}
-
-	net_pkt_frag_add(pkt, frag);
-
-	r = coap_packet_init(&response, pkt, 1, COAP_TYPE_ACK,
-			     tkl, token, COAP_RESPONSE_CODE_CONTENT, id);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_option(&response, COAP_OPTION_CONTENT_FORMAT,
-				      &plain_text_format,
-				      sizeof(plain_text_format));
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	rpl = net_rpl_get_default_instance();
-	if (!rpl || !rpl->current_dag) {
-		str = rpl_no_rank;
-		len = sizeof(rpl_no_rank);
-
-	} else {
-		snprintk(out, sizeof(out), "%s %u.%02u", rpl_rank,
-			 rpl->current_dag->rank / NET_RPL_MC_ETX_DIVISOR,
-			 (100 * (rpl->current_dag->rank %
-				 NET_RPL_MC_ETX_DIVISOR)) /
-			 NET_RPL_MC_ETX_DIVISOR);
-		str = out;
-		len = strlen(out);
-	}
-
-	r = coap_packet_append_payload_marker(&response);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_payload(&response, (u8_t *)str, len);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	get_from_ip_addr(request, &from);
-	r = net_context_sendto(pkt, (const struct sockaddr *)&from,
-			       sizeof(struct sockaddr_in6),
-			       NULL, 0, NULL, NULL);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-	}
-
-	return r;
-}
-
-/* RPL Link Metric */
-static int rpl_link_metric_get(struct coap_resource *resource,
-			       struct coap_packet *request)
-{
-	struct net_rpl_instance *rpl;
-	struct net_pkt *pkt;
-	struct net_buf *frag;
-	struct sockaddr_in6 from;
-	struct coap_packet response;
-	struct net_nbr *nbr;
-	const char *str;
-	u8_t token[8];
-	u16_t len, id;
-	u8_t tkl;
-	int r;
-	char out[RPL_MAX_REPLY];
-
-	NET_DBG("");
-
-	id = coap_header_get_id(request);
-	tkl = coap_header_get_token(request, (u8_t *)token);
-
-	pkt = net_pkt_get_tx(context, K_FOREVER);
-	if (!pkt) {
-		return -ENOMEM;
-	}
-
-	frag = net_pkt_get_data(context, K_FOREVER);
-	if (!frag) {
-		net_pkt_unref(pkt);
-		return -ENOMEM;
-	}
-
-	net_pkt_frag_add(pkt, frag);
-
-	r = coap_packet_init(&response, pkt, 1, COAP_TYPE_ACK,
-			     tkl, token, COAP_RESPONSE_CODE_CONTENT, id);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_option(&response, COAP_OPTION_CONTENT_FORMAT,
-				      &plain_text_format,
-				      sizeof(plain_text_format));
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	rpl = net_rpl_get_default_instance();
-	if (rpl && rpl->current_dag &&
-	    rpl->current_dag->preferred_parent) {
-		nbr = net_rpl_get_nbr(rpl->current_dag->preferred_parent);
-		if (nbr) {
-			snprintk(out, sizeof(out), "%s %u.%02u", rpl_link,
-				 (net_ipv6_nbr_data(nbr)->link_metric) /
-				 NET_RPL_MC_ETX_DIVISOR,
-				 (100 * ((net_ipv6_nbr_data(nbr)->link_metric) %
-					 NET_RPL_MC_ETX_DIVISOR)) /
-				 NET_RPL_MC_ETX_DIVISOR);
-
-			str = out;
-			len = strlen(out);
-		} else {
-			str = rpl_no_link;
-			len = sizeof(rpl_no_link);
-		}
-	} else {
-		str = rpl_no_link;
-		len = sizeof(rpl_no_link);
-	}
-
-	r = coap_packet_append_payload_marker(&response);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = coap_packet_append_payload(&response, (u8_t *)str, len);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	get_from_ip_addr(request, &from);
-	r = net_context_sendto(pkt, (const struct sockaddr *)&from,
-			       sizeof(struct sockaddr_in6),
-			       NULL, 0, NULL, NULL);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-	}
-
-	return r;
-}
-
-static void retransmit_request(struct k_work *work)
-{
-	struct coap_pending *pending;
-	int r;
-
-	pending = coap_pending_next_to_expire(pendings, NUM_PENDINGS);
-	if (!pending) {
-		return;
-	}
-
-	r = net_context_sendto(pending->pkt, &pending->addr,
-			       sizeof(struct sockaddr_in6),
-			       NULL, 0, NULL, NULL);
-	if (r < 0) {
-		return;
-	}
-
-	if (!coap_pending_cycle(pending)) {
-		coap_pending_clear(pending);
-		return;
-	}
-
-	k_delayed_work_submit(&retransmit_work, pending->timeout);
-}
-
-static int append_rpl_parent(struct coap_packet *response)
-{
-	struct net_rpl_instance *rpl;
-	struct in6_addr *parent;
-	char out[RPL_MAX_REPLY];
-	u16_t out_len;
-	u8_t pos;
-
-	rpl = net_rpl_get_default_instance();
-
-	pos = snprintk(out, sizeof(out), "parent-");
-	out_len = pos;
-
-	if (!rpl || !rpl->current_dag || !rpl->current_dag->preferred_parent) {
-		pos = snprintk(&out[out_len], sizeof(out), "None");
-		out_len += pos;
-
-	} else {
-		parent = net_rpl_get_parent_addr(net_pkt_iface(response->pkt),
-					rpl->current_dag->preferred_parent);
-		pos = snprintk(&out[out_len], sizeof(out), "%s",
-			       net_sprint_ipv6_addr(parent));
-		out_len += pos;
-	}
-
-	pos = snprintk(&out[out_len], sizeof(out), "\nrank-");
-	out_len += pos;
-
-	if (!rpl || !rpl->current_dag) {
-		pos = snprintk(&out[out_len], sizeof(out), "None");
-		out_len += pos;
-	} else {
-		pos = snprintk(&out[out_len], sizeof(out), "%u",
-			       rpl->current_dag->rank);
-		out_len += pos;
-	}
-
-	return  coap_packet_append_payload(response, (u8_t *)out, out_len);
-}
-
-static int send_notification_packet(const struct sockaddr *addr,
-				    u16_t age,
-				    socklen_t addrlen,
-				    u16_t id,
-				    const u8_t *token,
-				    u8_t tkl,
-				    bool is_response)
-{
-	struct coap_packet response;
-	struct coap_pending *pending;
-	struct net_pkt *pkt;
-	struct net_buf *frag;
-	u8_t type = COAP_TYPE_CON;
-	int r;
-
-	if (is_response) {
-		type = COAP_TYPE_ACK;
-	}
-
-	if (!is_response) {
-		id = coap_next_id();
-	}
-
-	pkt = net_pkt_get_tx(context, K_FOREVER);
-	frag = net_pkt_get_data(context, K_FOREVER);
-
-	net_pkt_frag_add(pkt, frag);
-
-	r = coap_packet_init(&response, pkt, 1, type,
-			     tkl, (u8_t *)token,
-			     COAP_RESPONSE_CODE_CONTENT, id);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	if (age >= 2) {
-		coap_append_option_int(&response, COAP_OPTION_OBSERVE, age);
-	}
-
-	r = coap_packet_append_payload_marker(&response);
-	if (r) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	r = append_rpl_parent(&response);
-	if (r < 0) {
-		net_pkt_unref(pkt);
-		return -EINVAL;
-	}
-
-	if (type == COAP_TYPE_CON) {
-		pending = coap_pending_next_unused(pendings, NUM_PENDINGS);
-		if (!pending) {
-			return -EINVAL;
-		}
-
-		r = coap_pending_init(pending, &response, addr);
-		if (r) {
-			return -EINVAL;
-		}
-
-		coap_pending_cycle(pending);
-		pending = coap_pending_next_to_expire(pendings, NUM_PENDINGS);
-
-		k_delayed_work_submit(&retransmit_work, pending->timeout);
-	}
-
-	return net_context_sendto(pkt, addr, addrlen, NULL, 0, NULL, NULL);
-}
-
-/* RPL Observe Server */
-static int rpl_obs_get(struct coap_resource *resource,
-		       struct coap_packet *request)
-{
-	struct coap_observer *observer;
-	struct sockaddr_in6 from;
-	u8_t token[8];
-	u16_t id;
-	u8_t tkl;
-	bool observe = true;
-
-	get_from_ip_addr(request, &from);
-
-	if (!coap_request_is_observe(request)) {
-		observe = false;
-		goto done;
-	}
-
-	observer = coap_find_observer_by_addr(observers, NUM_OBSERVERS,
-					      (const struct sockaddr *)&from);
-	if (observer) {
-		goto done;
-	}
-
-	observer = coap_observer_next_unused(observers, NUM_OBSERVERS);
-	if (!observer) {
-		return -ENOMEM;
-	}
-
-	coap_observer_init(observer, request, (const struct sockaddr *)&from);
-	coap_register_observer(resource, observer);
-
-done:
-	id = coap_header_get_id(request);
-	tkl = coap_header_get_token(request, token);
-
-	return send_notification_packet((const struct sockaddr *)&from,
-					observe ? resource->age : 0,
-					sizeof(struct sockaddr_in6), id,
-					token, tkl, true);
-}
-
-static const char * const led_default_path[] = { "led", "0", NULL };
-static const char * const led_default_attributes[] = {
-	"title=\"LED0: led=toggle ?len=0..\"",
-	"rt=\"Text\"",
-	NULL };
-
-static const char * const ipv6_neighbors_default_path[] = { "ipv6",
-							    "neighbors",
-							    NULL };
-static const char * const ipv6_neighbors_default_attributes[] = {
-	"title=\"IPv6 Neighbors\"",
-	"rt=Text",
-	NULL };
-
-static const char * const rpl_info_default_path[] = { "rpl-info", NULL };
-static const char * const rpl_info_default_attributes[] = {
-	"title=\"RPL Information\"",
-	"rt=Text",
-	NULL };
-
-static const char * const rpl_parent_default_path[] = { "rpl-info",
-							"parent",
-							NULL };
-static const char * const rpl_parent_default_attributes[] = {
-	"title=\"RPL Parent\"",
-	"rt=Text",
-	NULL };
-
-static const char * const rpl_rank_default_path[] = { "rpl-info",
-						      "rank",
-						      NULL };
-static const char * const rpl_rank_default_attributes[] = {
-	"title=\"RPL Rank\"",
-	"rt=Text",
-	NULL };
-
-static const char * const rpl_link_default_path[] = { "rpl-info",
-						      "link-metric",
-						      NULL };
-static const char * const rpl_link_default_attributes[] = {
-	"title=\"RPL Link Metric\"",
-	"rt=Text",
-	NULL };
-
-static const char * const rpl_obs_default_path[] = { "rpl-obs",
-						      NULL };
-static const char * const rpl_obs_default_attributes[] = {
-	"title=\"RPL Observe\"",
-	"rt=Text",
-	NULL };
+static const char * const led_default_path[] = { "led", NULL };
 
 static struct coap_resource resources[] = {
-	{ .get = well_known_core_get,
-	  .post = NULL,
-	  .put = NULL,
-	  .path = COAP_WELL_KNOWN_CORE_PATH,
-	  .user_data = NULL,
-	},
-	{ .get = led_get,
+	{ .get = NULL,
 	  .post = led_post,
-	  .put = led_put,
+	  .put = NULL,
 	  .path = led_default_path,
-	  .user_data = &((struct coap_core_metadata) {
-			  .attributes = led_default_attributes,
-			}),
-	},
-	{ .get = ipv6_neighbors_get,
-	  .post = NULL,
-	  .put = NULL,
-	  .path = ipv6_neighbors_default_path,
-	  .user_data = &((struct coap_core_metadata) {
-			  .attributes = ipv6_neighbors_default_attributes,
-			}),
-	},
-	{ .get = rpl_info_get,
-	  .post = NULL,
-	  .put = NULL,
-	  .path = rpl_info_default_path,
-	  .user_data = &((struct coap_core_metadata) {
-			  .attributes = rpl_info_default_attributes,
-			}),
-	},
-	{ .get = rpl_parent_get,
-	  .post = NULL,
-	  .put = NULL,
-	  .path = rpl_parent_default_path,
-	  .user_data = &((struct coap_core_metadata) {
-			  .attributes = rpl_parent_default_attributes,
-			}),
-	},
-	{ .get = rpl_rank_get,
-	  .post = NULL,
-	  .put = NULL,
-	  .path = rpl_rank_default_path,
-	  .user_data = &((struct coap_core_metadata) {
-			  .attributes = rpl_rank_default_attributes,
-			}),
-	},
-	{ .get = rpl_link_metric_get,
-	  .post = NULL,
-	  .put = NULL,
-	  .path = rpl_link_default_path,
-	  .user_data = &((struct coap_core_metadata) {
-			  .attributes = rpl_link_default_attributes,
-			}),
-	},
-	{ .get = rpl_obs_get,
-	  .post = NULL,
-	  .put = NULL,
-	  .path = rpl_obs_default_path,
-	  .user_data = &((struct coap_core_metadata) {
-			  .attributes = rpl_obs_default_attributes,
-			}),
+	  .user_data = NULL,
 	},
 	{ },
 };
@@ -1304,12 +226,6 @@ static bool join_coap_multicast_group(void)
 	return true;
 }
 
-int ble_to_rpl(u16_t src, u16_t dst)
-{
-	/* FIXME: add implementation */
-	return 0;
-}
-
 void init_rpl_node(void)
 {
 	static struct sockaddr_in6 any_addr = {
@@ -1317,15 +233,6 @@ void init_rpl_node(void)
 		.sin6_addr = IN6ADDR_ANY_INIT,
 		.sin6_port = htons(MY_COAP_PORT) };
 	int r;
-
-	led0 = device_get_binding(LED_GPIO_NAME);
-	if (led0) {
-		gpio_pin_configure(led0, LED_PIN, GPIO_DIR_OUT);
-	} else {
-		NET_WARN("Failed to bind '%s'"
-			 "fake_led will provide dummpy replies",
-			 LED_GPIO_NAME);
-	}
 
 	if (!join_coap_multicast_group()) {
 		NET_ERR("Could not join CoAP multicast group");
@@ -1349,6 +256,4 @@ void init_rpl_node(void)
 	if (r) {
 		NET_ERR("Could not receive in the context");
 	}
-
-	k_delayed_work_init(&retransmit_work, retransmit_request);
 }

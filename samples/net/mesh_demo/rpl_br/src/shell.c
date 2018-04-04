@@ -48,14 +48,8 @@ int coap_send(int argc, char *argv[])
 		return -EINVAL;
 	}
 
-	if (strcmp(argv[1], "led_on") == 0) {
-		type = COAP_REQ_LED_ON;
-	} else if (strcmp(argv[1], "led_off") == 0) {
-		type = COAP_REQ_LED_OFF;
-	} else if (strcmp(argv[1], "rpl_info") == 0) {
-		type = COAP_REQ_RPL_INFO;
-	} else if (strcmp(argv[1], "rpl_obs") == 0) {
-		type = COAP_REQ_RPL_OBS;
+	if (strcmp(argv[1], "toggle") == 0) {
+		type = COAP_REQ_LED_TOGGLE;
 	} else {
 		NET_INFO("Invalid arguments");
 		return -EINVAL;
@@ -69,10 +63,7 @@ int coap_send(int argc, char *argv[])
 static struct shell_cmd br_commands[] = {
 	/* Keep the commands in alphabetical order */
 	{ "coap", coap_send, "\n\tSend CoAP commands to Node\n"
-			"led_on <host>\n\tTurn on LED on host\n"
-			"led_off <host>\n\tTurn off LED on host\n"
-			"rpl_info <host>\n\tGet Node rpl info\n"
-			"rpl_obs <host>\n\tSet RPL observer on Node\n"
+			"toggle <host> \n\tToggle the LED\n"
 	},
 	{ "repair", br_repair,
 		"\n\tGlobal repair RPL network" },

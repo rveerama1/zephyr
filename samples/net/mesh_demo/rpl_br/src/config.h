@@ -18,30 +18,9 @@ bool setup_rpl(struct net_if *iface, const char *addr_prefix);
 
 enum coap_request_type {
 	COAP_REQ_NONE = 0,
-	COAP_REQ_LED_ON = 1,	/* Turn On LED */
-	COAP_REQ_LED_OFF = 2,	/* Turn Off LED */
-	COAP_REQ_RPL_INFO = 3,	/* Get RPL Info */
-	COAP_REQ_RPL_OBS = 4,	/* Register OBS */
+	COAP_REQ_LED_TOGGLE = 1,	/* Toggle the LED */
 };
 
-struct network_topology {
-	struct {
-		bool used;
-		u16_t id;
-		u16_t rank;
-		char label[4];
-		struct in6_addr addr;
-		struct in6_addr parent;
-	} nodes[CONFIG_NET_IPV6_MAX_NEIGHBORS];
-
-	struct {
-		u16_t from;
-		u16_t to;
-		bool used;
-	} edges[CONFIG_NET_IPV6_MAX_NEIGHBORS];
-};
-
-struct network_topology topology;
 
 typedef void (*coap_reply_cb_t)(struct coap_packet *response, void *user_data);
 
@@ -50,6 +29,4 @@ void coap_send_request(struct in6_addr *peer_addr,
 		       enum coap_request_type type,
 		       coap_reply_cb_t cb,
 		       void *user_data);
-
-void coap_remove_node_from_topology(struct in6_addr *peer);
 #endif

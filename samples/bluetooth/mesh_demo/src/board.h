@@ -7,7 +7,7 @@
  */
 
 #if !defined(NODE_ADDR)
-#define NODE_ADDR 0x0b0c
+#define NODE_ADDR 0x000f
 #endif
 
 void board_button_1_pressed(void);

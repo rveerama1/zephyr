@@ -310,10 +310,10 @@ static void configure_button(void)
 
 	gpio_pin_configure(gpio, SW0_GPIO_PIN,
 			   (GPIO_DIR_IN | GPIO_INT | GPIO_INT_EDGE |
-			    GPIO_INT_ACTIVE_LOW));
+			    GPIO_INT_ACTIVE_LOW | GPIO_INT_DEBOUNCE));
 	gpio_pin_configure(gpio, SW1_GPIO_PIN,
 			   (GPIO_DIR_IN | GPIO_INT | GPIO_INT_EDGE |
-			    GPIO_INT_ACTIVE_LOW));
+			    GPIO_INT_ACTIVE_LOW | GPIO_INT_DEBOUNCE));
 
 	gpio_init_callback(&button_cb, button_pressed,
 			   BIT(SW0_GPIO_PIN) | BIT(SW1_GPIO_PIN));

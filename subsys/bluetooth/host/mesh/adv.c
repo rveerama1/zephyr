@@ -174,7 +174,16 @@ static void adv_thread(void *p1, void *p2, void *p3)
 
 		/* busy == 0 means this was canceled */
 		if (BT_MESH_ADV(buf)->busy) {
+			u8_t delay;
+
 			BT_MESH_ADV(buf)->busy = 0;
+
+			/* Add 0-50ms random delay to transmissions in
+			 * order to reduce collisions.
+		       	 */
+			bt_rand(&delay, sizeof(delay));
+			k_sleep(K_MSEC(delay % 50));
+
 			adv_send(buf);
 		}
 

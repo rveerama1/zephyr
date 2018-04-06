@@ -1,0 +1,13 @@
+***** BOOTING ZEPHYR OS v1.11.99 - BUILD: Apr  6 2018 07:18:28 *****
+Initializing Bluetooth...
+[bt] [INF] hci_vs_init: HW Platform: Nordic Semiconductor (0x0002)
+[bt] [INF] hci_vs_init: HW Variant: nRF51x (0x0001)
+[bt] [INF] hci_vs_init: Firmware: Standard Bluetooth controller (0x00) Version 1.11 Build 99
+[bt] [INF] show_dev_info: Identity: ea:19:29:50:53:33 (random)
+[bt] [INF] show_dev_info: HCI: version 5.0 (0x09) revision 0x0000, manufacturer 0x05f1
+[bt] [INF] show_dev_info: LMP: version 5.0 (0x09) subver 0xffff
+Bluetooth initialized
+Mesh initialized
+[bt] [INF] bt_mesh_provision: Primary Element: 0x0001
+Provisioning completed, configuring...
+Configuring complete

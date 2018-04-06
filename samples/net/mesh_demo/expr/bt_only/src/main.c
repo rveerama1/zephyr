@@ -11,8 +11,6 @@
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/mesh.h>
 
-#include "rpl.h"
-
 #define COMP_ID BT_COMP_ID_LF
 
 #define MOD_LF 0x0000
@@ -84,9 +82,9 @@ static void vnd_button_pressed(struct bt_mesh_model *model,
 			       struct bt_mesh_msg_ctx *ctx,
 			       struct net_buf_simple *buf)
 {
-	//printk("Message 0x%04x -> 0x%04x\n", ctx->addr, model->elem->addr);
+	printk("Message 0x%04x -> 0x%04x\n", ctx->addr, model->elem->addr);
 
-	ble_to_rpl(ctx->addr, model->elem->addr);
+	//ble_to_rpl(ctx->addr, model->elem->addr);
 }
 
 static const struct bt_mesh_model_op vnd_ops[] = {
@@ -197,11 +195,6 @@ static const struct bt_mesh_prov prov = {
 void main(void)
 {
 	int err;
-
-	/* Set up 802.15.4 RPL proxy */
-	printk("Initializing RPL proxy...\n");
-
-	init_rpl_node();
 
 	printk("Initializing Bluetooth...\n");
 

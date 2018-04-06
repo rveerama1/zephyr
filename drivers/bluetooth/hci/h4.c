@@ -403,16 +403,9 @@ static void bt_uart_isr(struct device *unused)
 {
 	ARG_UNUSED(unused);
 
-	while (uart_irq_update(h4_dev) && uart_irq_is_pending(h4_dev)) {
-#if 0
-		if (uart_irq_tx_ready(h4_dev)) {
-			process_tx();
-		}
-#endif
-
-		if (uart_irq_rx_ready(h4_dev)) {
-			process_rx();
-		}
+	while (uart_irq_update(h4_dev) && uart_irq_is_pending(h4_dev) &&
+	       uart_irq_rx_ready(h4_dev)) {
+		process_rx();
 	}
 }
 

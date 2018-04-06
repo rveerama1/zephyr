@@ -109,12 +109,34 @@ end:
 	return false;
 }
 
+/* HACK: Send LED Toggle messages only One per Second.
+ * BT node button sending multiple callbacks on single press.
+ * Actual fix should be on BT node to generate only one message
+ * per one press.
+ */
+
+static bool send_coap = true;
+static struct k_delayed_work flow_ctrl_timer;
+
+static void flow_control_timeout(struct k_work *work)
+{
+	send_coap = true;
+}
+
 int ble_to_rpl(u16_t src, u16_t dst)
 {
 	struct net_rpl_instance *rpl;
 	struct sockaddr_in6 peer;
 	struct in6_addr *parent = NULL;
 
+	if (!send_coap) {
+		NET_DBG("Message 0x%04x -> 0x%04x sent already", src, dst);
+		return 0;
+	}
+
+	send_coap = false;
+	k_delayed_work_submit(&flow_ctrl_timer, K_SECONDS(1));
+#if 0
 	/* Send message in below combinations only
 	 * src -> dst
 	 *  5  ->  1
@@ -129,7 +151,7 @@ int ble_to_rpl(u16_t src, u16_t dst)
 	      (src == 8 && dst == 4))) {
 		return 0;
 	}
-
+#endif
 	NET_DBG("Message 0x%04x -> 0x%04x", src, dst);
 
 	rpl = net_rpl_get_default_instance();
@@ -275,4 +297,6 @@ void init_rpl_node(void)
 	if (r) {
 		NET_ERR("Could not receive in the context");
 	}
+
+	k_delayed_work_init(&flow_ctrl_timer, flow_control_timeout);
 }

@@ -178,6 +178,8 @@ static void configure(u16_t addr)
 				 BT_MESH_MODEL_ID_HEALTH_SRV, &status);
 
 	/* Add model subscription */
+	/* Do not listen for group address, some of 802.15.4 frames are lost. */
+#if 0
 	bt_mesh_cfg_mod_sub_add_vnd(net_idx, addr, addr, GROUP_ADDR,
 				    MOD_LF, COMP_ID, &status);
 	bt_mesh_cfg_mod_sub_add_vnd(net_idx, addr, addr + 1, GROUP_ADDR,
@@ -186,6 +188,7 @@ static void configure(u16_t addr)
 				    MOD_LF, COMP_ID, &status);
 	bt_mesh_cfg_mod_sub_add_vnd(net_idx, addr, addr + 3, GROUP_ADDR,
 				    MOD_LF, COMP_ID, &status);
+#endif
 }
 
 static const u8_t dev_uuid[16] = { 0xdd, 0xdd };

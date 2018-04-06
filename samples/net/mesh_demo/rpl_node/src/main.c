@@ -38,6 +38,8 @@
 #define LED_GPIO_NAME LED0_GPIO_PORT
 #define LED_PIN LED0_GPIO_PIN
 
+#define LED1_PIN 27 /* AH - J15 - 12 */
+
 #define RPL_MAX_REPLY 75
 
 #define PKT_WAIT_TIME K_SECONDS(1)

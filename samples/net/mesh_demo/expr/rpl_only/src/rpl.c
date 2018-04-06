@@ -179,8 +179,6 @@ static int led_post(struct coap_resource *resource,
 
 	NET_DBG("Message from %d -> %d", src, dst);
 
-	rpl_to_ble(src, dst);
-
 	return 0;
 }
 

@@ -512,6 +512,13 @@ end:
 	return false;
 }
 
+static bool send_coap = true;
+static struct k_delayed_work flow_ctrl_timer;
+
+static void flow_control_timeout(struct k_work *work)
+{
+	send_coap = true;
+}
 
 static void button_pressed(struct device *gpiob, struct gpio_callback *cb,
 			   u32_t pins)
@@ -519,6 +526,13 @@ static void button_pressed(struct device *gpiob, struct gpio_callback *cb,
 	struct net_rpl_instance *rpl;
 	struct sockaddr_in6 peer;
 	struct in6_addr *parent = NULL;
+
+	if (!send_coap) {
+		return;
+	}
+
+	send_coap = false;
+	k_delayed_work_submit(&flow_ctrl_timer, K_MSEC(1000));
 
 	rpl = net_rpl_get_default_instance();
 	if (rpl && rpl->current_dag && rpl->current_dag->preferred_parent) {
@@ -605,6 +619,8 @@ static void init_app(void)
 	if (r) {
 		NET_ERR("Could not receive in the context");
 	}
+
+	k_delayed_work_init(&flow_ctrl_timer, flow_control_timeout);
 }
 
 void main(void)

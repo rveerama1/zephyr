@@ -136,7 +136,7 @@ int rpl_to_ble(u16_t src, u16_t dst)
 
 	printk("src 0x%04x dst 0x%04x\n", src, dst);
 
-	if (!src || src >= ARRAY_SIZE(elements)) {
+	if (!src || src > ARRAY_SIZE(elements)) {
 		return -EINVAL;
 	}
 

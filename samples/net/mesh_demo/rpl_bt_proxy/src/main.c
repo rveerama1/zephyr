@@ -136,11 +136,11 @@ int rpl_to_ble(u16_t src, u16_t dst)
 
 	printk("src 0x%04x dst 0x%04x\n", src, dst);
 
-	if (src >= ARRAY_SIZE(elements)) {
+	if (!src || src >= ARRAY_SIZE(elements)) {
 		return -EINVAL;
 	}
 
-	model = &elements[src].vnd_models[0];
+	model = &elements[src - 1].vnd_models[0];
 
 	/* Bind to Health model */
 	bt_mesh_model_msg_init(&msg, OP_VENDOR_BUTTON);

@@ -77,6 +77,22 @@ static const char * const rpl_obs_path[] = { "rpl-obs", NULL };
 	        { { { 0xfe, 0x80, 0, 0, 0, 0, 0, 0, \
 		      0x02, 0x12, 0x4b, 0, 0, 0, 0, 0x04 } } }
 
+#define BT_NODE_5	\
+	        { { { 0xfe, 0x80, 0, 0, 0, 0, 0, 0, \
+		      0x02, 0x12, 0x4b, 0, 0, 0, 0, 0x05 } } }
+
+#define BT_NODE_6	\
+	        { { { 0xfe, 0x80, 0, 0, 0, 0, 0, 0, \
+		      0x02, 0x12, 0x4b, 0, 0, 0, 0, 0x06 } } }
+
+#define BT_NODE_7	\
+	        { { { 0xfe, 0x80, 0, 0, 0, 0, 0, 0, \
+		      0x02, 0x12, 0x4b, 0, 0, 0, 0, 0x07 } } }
+
+#define BT_NODE_8	\
+	        { { { 0xfe, 0x80, 0, 0, 0, 0, 0, 0, \
+		      0x02, 0x12, 0x4b, 0, 0, 0, 0, 0x08 } } }
+
 static struct sockaddr_in6 proxy_peer = {
 			.sin6_family = AF_INET6,
 			.sin6_addr = BR_RPL_PROXY,
@@ -404,6 +420,10 @@ static void add_nbr_to_topology(struct in6_addr *nbr)
 
 static void add_bt_nodes_topology(struct in6_addr *node)
 {
+	struct in6_addr bt_node_5 = BT_NODE_5;
+	struct in6_addr bt_node_6 = BT_NODE_6;
+	struct in6_addr bt_node_7 = BT_NODE_7;
+	struct in6_addr bt_node_8 = BT_NODE_8;
 	u8_t i;
 	u8_t j;
 
@@ -421,7 +441,25 @@ static void add_bt_nodes_topology(struct in6_addr *node)
 				 sizeof(topology.nodes[i].label),
 				 "BT%d", topology.nodes[i].id);
 
-			net_ipaddr_copy(&topology.nodes[i].addr, node);
+			switch (j) {
+			case 1:
+				net_ipaddr_copy(&topology.nodes[i].addr,
+						&bt_node_5);
+				break;
+			case 2:
+				net_ipaddr_copy(&topology.nodes[i].addr,
+						&bt_node_6);
+				break;
+			case 3:
+				net_ipaddr_copy(&topology.nodes[i].addr,
+						&bt_node_7);
+				break;
+			case 4:
+				net_ipaddr_copy(&topology.nodes[i].addr,
+						&bt_node_8);
+				break;
+			}
+
 			net_ipaddr_copy(&topology.nodes[i].parent, node);
 			break;
 		}
@@ -432,6 +470,7 @@ static void add_bt_nodes_topology(struct in6_addr *node)
 static void add_node_to_topology(struct in6_addr *node)
 {
 	struct in6_addr proxy = BR_RPL_PROXY;
+
 	u8_t i;
 
 	/* BR takes 'id : 1', so node's id starts from 2 */
@@ -484,8 +523,33 @@ static void update_node_topology(struct in6_addr *node,
 	}
 }
 
+static void remove_bt_nodes_topology(void)
+{
+	struct in6_addr bt_node_5 = BT_NODE_5;
+	struct in6_addr bt_node_6 = BT_NODE_6;
+	struct in6_addr bt_node_7 = BT_NODE_7;
+	struct in6_addr bt_node_8 = BT_NODE_8;
+	u8_t i;
+
+	/* BR takes 'id : 1', so node's id starts from 2 */
+	for (i = 1; i < CONFIG_NET_IPV6_MAX_NEIGHBORS; i++) {
+		if (!topology.nodes[i].used) {
+			continue;
+		}
+
+		if (net_ipv6_addr_cmp(&topology.nodes[i].addr, &bt_node_5) ||
+		    net_ipv6_addr_cmp(&topology.nodes[i].addr, &bt_node_6) ||
+		    net_ipv6_addr_cmp(&topology.nodes[i].addr, &bt_node_7) ||
+		    net_ipv6_addr_cmp(&topology.nodes[i].addr, &bt_node_8)){
+			topology.nodes[i].used = false;
+		}
+	}
+
+}
+
 static void remove_node_from_topology(struct in6_addr *node)
 {
+	struct in6_addr proxy = BR_RPL_PROXY;
 	u8_t i;
 
 	for (i = 1; i < CONFIG_NET_IPV6_MAX_NEIGHBORS; i++) {
@@ -499,6 +563,10 @@ static void remove_node_from_topology(struct in6_addr *node)
 		}
 
 		topology.nodes[i].used = false;
+	}
+
+	if (net_ipv6_addr_cmp(node, &proxy)) {
+		remove_bt_nodes_topology();
 	}
 }
 

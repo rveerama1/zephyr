@@ -107,9 +107,6 @@ static struct sockaddr_in6 rpl_peer4 = {
 			.sin6_port = PEER_COAP_PORT
 			};
 
-static void coap_send_request1(struct sockaddr_in6 *remote, coap_reply_cb_t cb,
-			       void *user_data, u8_t src, u8_t dst);
-
 static void get_from_ip_addr(struct coap_packet *cpkt,
 			     struct sockaddr_in6 *from)
 {
@@ -290,23 +287,23 @@ end:
 
 static void bt_rpl_proxy_send_request(u8_t src, u8_t dst)
 {
-	coap_send_request1(&proxy_peer, NULL, NULL, src, dst);
+	toggle_led(&proxy_peer, coap_next_id(), src, dst);
 }
 
 static void rpl_send_request(u8_t src, u8_t dst)
 {
 	switch (dst) {
 	case 1:
-		coap_send_request1(&rpl_peer1, NULL, NULL, src, dst);
+		toggle_led(&rpl_peer1, coap_next_id(), src, dst);
 		break;
 	case 2:
-		coap_send_request1(&rpl_peer2, NULL, NULL, src, dst);
+		toggle_led(&rpl_peer2, coap_next_id(), src, dst);
 		break;
 	case 3:
-		coap_send_request1(&rpl_peer3, NULL, NULL, src, dst);
+		toggle_led(&rpl_peer3, coap_next_id(), src, dst);
 		break;
 	case 4:
-		coap_send_request1(&rpl_peer4, NULL, NULL, src, dst);
+		toggle_led(&rpl_peer4, coap_next_id(), src, dst);
 		break;
 	}
 }
@@ -385,16 +382,8 @@ static void request_timeout(struct k_work *work)
 
 	request->count++;
 
-	switch (request->type) {
-	case COAP_REQ_NONE:
-		return;
-	case COAP_REQ_LED_TOGGLE:
-		toggle_led(&request->peer, request->id, request->src,
-			   request->dst);
-		break;
-	case COAP_REQ_RPL_OBS:
+	if (request->type == COAP_REQ_RPL_OBS) {
 		set_rpl_observer(&request->peer, request->id);
-		break;
 	}
 
 	k_delayed_work_submit(&request->timer, RESPONSE_TIME);
@@ -698,50 +687,6 @@ void coap_remove_node_from_topology(struct in6_addr *peer)
 	remove_node_from_topology(peer);
 }
 
-static void coap_send_request1(struct sockaddr_in6 *remote,
-			       coap_reply_cb_t cb,
-			       void *user_data,
-			       u8_t src,
-			       u8_t dst)
-{
-	struct sockaddr_in6 *peer = remote;
-	struct coap_request *request;
-
-	request = get_coap_request_by_type(peer, COAP_REQ_LED_TOGGLE);
-	if (request) {
-		/* Same request already sent, did not get reply from it,
-		 * timer will run until requests reach
-		 * MAX_COAP_REQUEST_ATTEMPTS.
-		 */
-		return;
-	}
-
-	request = get_free_coap_request();
-	if (!request) {
-		toggle_led(peer, coap_next_id(), src, dst);
-		return;
-	}
-
-	request->peer.sin6_family = peer->sin6_family;
-	request->peer.sin6_port = peer->sin6_port;
-	net_ipaddr_copy(&request->peer.sin6_addr, &peer->sin6_addr);
-
-	request->id = coap_next_id();
-	request->count = 1;
-	request->type = COAP_REQ_LED_TOGGLE;
-	request->cb = cb;
-	request->user_data = user_data;
-	request->used = true;
-	request->src = src;
-	request->dst = dst;
-
-	request->code = COAP_RESPONSE_CODE_CHANGED;
-	toggle_led(&request->peer, request->id, request->src, request->dst);
-
-	k_delayed_work_init(&request->timer, request_timeout);
-	k_delayed_work_submit(&request->timer, RESPONSE_TIME);
-}
-
 void coap_send_request(struct in6_addr *peer_addr,
 		       enum coap_request_type type,
 		       coap_reply_cb_t cb,
@@ -756,6 +701,14 @@ void coap_send_request(struct in6_addr *peer_addr,
 	peer.sin6_port = PEER_COAP_PORT;
 	net_ipaddr_copy(&peer.sin6_addr, peer_addr);
 
+	if (type == COAP_REQ_RPL_OBS) {
+		goto obs;
+	} else {
+		toggle_led(&peer, coap_next_id(), src, dst);
+		return;
+	}
+
+obs:
 	request = get_coap_request_by_type(&peer, type);
 	if (request) {
 		/* Same request already sent, did not get reply from it,
@@ -767,17 +720,7 @@ void coap_send_request(struct in6_addr *peer_addr,
 
 	request = get_free_coap_request();
 	if (!request) {
-		switch (type) {
-		case COAP_REQ_NONE:
-			return;
-		case COAP_REQ_LED_TOGGLE:
-			toggle_led(&peer, coap_next_id(), src, dst);
-		case COAP_REQ_RPL_OBS:
-			add_node_to_topology(peer_addr);
-			set_rpl_observer(&peer, coap_next_id());
-			break;
-		}
-
+		NET_ERR("No free coap requests");
 		return;
 	}
 
@@ -794,22 +737,11 @@ void coap_send_request(struct in6_addr *peer_addr,
 	request->src = src;
 	request->dst = dst;
 
+	request->code = COAP_RESPONSE_CODE_CONTENT;
+	add_node_to_topology(peer_addr);
+	set_rpl_observer(&request->peer, request->id);
+
 	k_delayed_work_init(&request->timer, request_timeout);
-
-	switch (type) {
-	case COAP_REQ_NONE:
-		return;
-	case COAP_REQ_LED_TOGGLE:
-		request->code = COAP_RESPONSE_CODE_CHANGED;
-		toggle_led(&request->peer, request->id, request->src,
-			   request->dst);
-		break;
-	case COAP_REQ_RPL_OBS:
-		request->code = COAP_RESPONSE_CODE_CONTENT;
-		add_node_to_topology(peer_addr);
-		set_rpl_observer(&request->peer, request->id);
-	}
-
 	k_delayed_work_submit(&request->timer, RESPONSE_TIME);
 }
 

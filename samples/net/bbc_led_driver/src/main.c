@@ -58,14 +58,14 @@ static const struct led_rgb gray = {
 };
 
 static const struct led_rgb red = {
-	.r = 0x0f,
+	.r = 0x3f,
 	.g = 0x00,
 	.b = 0x00,
 };
 static const struct led_rgb green = {
-	.r = 0x00,
-	.g = 0x0f,
-	.b = 0x00,
+	.r = 0x3f,
+	.g = 0x3f,
+	.b = 0x3f,
 };
 
 static const struct led_rgb blue = {
@@ -81,21 +81,15 @@ struct led_rgb colored_strip0[STRIP_NUM_LEDS];
 struct led_rgb colored_strip1[STRIP_NUM_LEDS];
 struct led_rgb colored_strip2[STRIP_NUM_LEDS];
 
-struct led_rdb *strips[] = { 
-        black_strip, 
-	colored_strip0,  
-	colored_strip1,  
-	colored_strip2 
+struct led_rgb *strips[] = {
+        black_strip,
+	colored_strip0,
+	colored_strip1,
+	colored_strip2,
 };
 
-
-
-
-
-
-
-#define USE_GPIO_PIN_1 	    /*SW0_GPIO_PIN */ EXT_P1_GPIO_PIN
-#define USE_GPIO_PIN_2 	    /*SW1_GPIO_PIN */ EXT_P2_GPIO_PIN
+#define USE_GPIO_PIN_1	    /*SW0_GPIO_PIN */ EXT_P1_GPIO_PIN
+#define USE_GPIO_PIN_2	    /*SW1_GPIO_PIN */ EXT_P2_GPIO_PIN
 #define USE_GPIO_PIN_NAME   SW0_GPIO_NAME
 
 
@@ -106,7 +100,7 @@ void main(void)
 {
 	struct device *strip;
 	size_t i, time;
-	u32_t value, last_value; 
+	u32_t value, last_value;
 
 #if defined(CONFIG_SPI)
 	struct device *spi;
@@ -142,12 +136,14 @@ void main(void)
                            (GPIO_DIR_IN | GPIO_INT | GPIO_INT_EDGE |  
                             GPIO_INT_ACTIVE_HIGH/*LOW*/));
 #endif
-	/*Fill the strips with solid color*/
+
+#define SET_PIXEL(pixel, color) memcpy(&pixel, &color, sizeof(pixel))
+
+	/* Fill the strips with solid color */
 	for (i = 0; i < STRIP_NUM_LEDS; i++) {
-#define SET_PIXEL(pixel, color) memcpy(&pixel,  &color, sizeof(pixel))
 		SET_PIXEL(black_strip[i], black);
-		//SET_PIXEL(colored_strip0[i], red);
-		SET_PIXEL(colored_strip0[i], green);
+		SET_PIXEL(colored_strip0[i], red);
+		SET_PIXEL(colored_strip1[i], green);
 		//SET_PIXEL(colored_strip2[i], blue);
 		/*memcpy(&black_strip[i],  &black, sizeof(black_strip[i]));*/
 	}
@@ -159,36 +155,31 @@ void main(void)
 	value = 0;
 
 	while (1) {
-		
-		if(last_value != value ) {
+		if (last_value != value ) {
 
-			if(value > 3)  value = 0;
-	
-			SYS_LOG_INF("Updating strip color to index  %u", value);			
-			led_strip_update_rgb(strip, strips[value], STRIP_NUM_LEDS);
+			if(value > ARRAY_SIZE(strips)) {
+				value = 0;
+			}
 
-			last_value = value; 
+			SYS_LOG_INF("Updating strip color to index  %u",
+				    value);
+			led_strip_update_rgb(strip, strips[value],
+					     STRIP_NUM_LEDS);
+
+			last_value = value;
 		}
 
 		k_sleep(DELAY_TIME);
 
-		if( (time % CHECK_GPIO_CLICKS) == 0 )
-		{	
-
-			if ( 0 == gpio_pin_read(gpio, USE_GPIO_PIN_1, &value) )
-			{
+		if( (time % CHECK_GPIO_CLICKS) == 0 ) {
+			if (!gpio_pin_read(gpio, USE_GPIO_PIN_1, &value)) {
 				//SYS_LOG_INF("Read %u from the port", v);
+			} else {
+				SYS_LOG_ERR("Cannot read GPIO 1 %s",
+					    USE_GPIO_PIN_NAME);
 			}
-			else
-			{
-				SYS_LOG_ERR("Cannot read GPIO 1 %s", USE_GPIO_PIN_NAME);
-			}
-
-
 		}
 
 		time++;
-
-
 	}
 }

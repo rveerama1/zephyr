@@ -1165,7 +1165,6 @@ void DSPI_MasterTransferHandleIRQ(SPI_Type *base, dspi_master_handle_t *handle)
                 if (handle->rxData)
                 {
                     *handle->rxData = wordReceived;
-                    ++handle->rxData;
                 }
 
                 --handle->remainingReceiveByteCount;
@@ -1174,6 +1173,10 @@ void DSPI_MasterTransferHandleIRQ(SPI_Type *base, dspi_master_handle_t *handle)
                 {
                     break;
                 }
+
+               if (handle->rxData) {
+                       ++handle->rxData;
+               }
             } /* End of RX FIFO drain while loop */
         }
     }

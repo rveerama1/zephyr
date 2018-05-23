@@ -421,6 +421,7 @@ static int test_fragment(struct net_fragment_data *data)
 	int result = TC_FAIL;
 	struct net_pkt *pkt;
 	struct net_buf *frag, *dfrag;
+	int diff;
 
 	pkt = create_pkt(data);
 	if (!pkt) {
@@ -433,9 +434,13 @@ static int test_fragment(struct net_fragment_data *data)
 	net_hexdump_frags("before-compression", pkt, false);
 #endif
 
-	if (!net_6lo_compress(pkt, data->iphc,
-			      ieee802154_fragment)) {
+	if (!net_6lo_compress(pkt, data->iphc, &diff)){
 		TC_PRINT("compression failed\n");
+		goto end;
+	}
+
+	if (!(ieee802154_fragment(pkt, diff))) {
+		TC_PRINT("fragmentation failed\n");
 		goto end;
 	}
 

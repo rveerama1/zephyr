@@ -676,8 +676,7 @@ static inline bool is_src_and_dst_addr_ctx_based(struct net_ipv6_hdr *ipv6,
  * | 0 | 1 | 1 |  TF   |NH | HLIM  |CID|SAC|  SAM  | M |DAC|  DAM  |
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
  */
-static inline bool compress_IPHC_header(struct net_pkt *pkt,
-					fragment_handler_t fragment)
+static inline bool compress_IPHC_header(struct net_pkt *pkt, int *diff)
 {
 #if defined(CONFIG_NET_6LO_CONTEXT)
 	struct net_6lo_context *src = NULL;
@@ -789,8 +788,8 @@ end:
 	/* Compact the fragments, so that gaps will be filled */
 	net_pkt_compact(pkt);
 
-	if (fragment) {
-		return fragment(pkt, compressed - offset);
+	if (diff) {
+		*diff = compressed - offset;
 	}
 
 	return true;
@@ -1385,8 +1384,7 @@ fail:
 }
 
 /* Adds IPv6 dispatch as first byte and adjust fragments  */
-static inline bool compress_ipv6_header(struct net_pkt *pkt,
-					fragment_handler_t fragment)
+static inline bool compress_ipv6_header(struct net_pkt *pkt, int *diff)
 {
 	struct net_buf *frag;
 
@@ -1403,8 +1401,8 @@ static inline bool compress_ipv6_header(struct net_pkt *pkt,
 	/* Compact the fragments, so that gaps will be filled */
 	net_pkt_compact(pkt);
 
-	if (fragment) {
-		return fragment(pkt, -1);
+	if (diff) {
+		*diff = -1;
 	}
 
 	return true;
@@ -1421,13 +1419,12 @@ static inline bool uncompress_ipv6_header(struct net_pkt *pkt)
 	return true;
 }
 
-bool net_6lo_compress(struct net_pkt *pkt, bool iphc,
-		      fragment_handler_t fragment)
+bool net_6lo_compress(struct net_pkt *pkt, bool iphc, int *diff)
 {
 	if (iphc) {
-		return compress_IPHC_header(pkt, fragment);
+		return compress_IPHC_header(pkt, diff);
 	} else {
-		return compress_ipv6_header(pkt, fragment);
+		return compress_ipv6_header(pkt, diff);
 	}
 }
 

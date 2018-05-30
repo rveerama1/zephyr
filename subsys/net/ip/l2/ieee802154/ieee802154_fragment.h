@@ -30,7 +30,7 @@
  *
  *  @return True in case of success, false otherwise
  */
-bool ieee802154_fragment(struct net_pkt *pkt, int hdr_diff);
+//bool ieee802154_fragment(struct net_pkt *pkt, int hdr_diff);
 
 /**
  *  @brief Reassemble 802.15.4 fragments as per RFC 6282
@@ -49,5 +49,10 @@ bool ieee802154_fragment(struct net_pkt *pkt, int hdr_diff);
  */
 
 enum net_verdict ieee802154_reassemble(struct net_pkt *pkt);
+
+bool ieee802154_fragment_init(struct net_pkt *pkt, int hdr_diff);
+bool ieee802154_fragment_next(struct net_pkt *pkt);
+bool ieee802154_fragment_has_next(struct net_pkt *pkt);
+void ieee802154_fragment_close(struct net_pkt *pkt);
 
 #endif /* __NET_IEEE802154_FRAGMENT_H__ */

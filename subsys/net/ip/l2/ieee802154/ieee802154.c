@@ -191,7 +191,17 @@ static inline bool ieee802154_manage_send_packet(struct net_if *iface,
 		return ret;
 	}
 
-	ret = ieee802154_fragment(pkt, diff);
+	ret = ieee802154_fragment_init(pkt, diff);
+	if (!ret) {
+		ieee802154_fragment_close(pkt);
+		return ret;
+	}
+
+	ret = ieee802154_fragment_next(pkt);
+	if (!ret) {
+		ieee802154_fragment_close(pkt);
+		return ret;
+	}
 #else
 	ret = net_6lo_compress(pkt, true);
 #endif
@@ -200,7 +210,6 @@ static inline bool ieee802154_manage_send_packet(struct net_if *iface,
 
 	return ret;
 }
-
 #else /* CONFIG_NET_6LO */
 
 #define ieee802154_manage_recv_packet(...) NET_CONTINUE
@@ -268,20 +277,18 @@ static enum net_verdict ieee802154_send(struct net_if *iface,
 		return NET_DROP;
 	}
 
-	frag = pkt->frags;
-	while (frag) {
-		if (frag->len > IEEE802154_MTU) {
-			NET_ERR("Frag %p as too big length %u",
-				frag, frag->len);
+	if (net_pkt_get_len(pkt) > IEEE802154_MTU) {
+		NET_ERR("Pkt %p has too big length %u", pkt,
+			net_pkt_get_len(pkt));
 			return NET_DROP;
-		}
+	}
 
-		if (!ieee802154_create_data_frame(ctx, net_pkt_ll_dst(pkt),
-						  frag, reserved_space)) {
-			return NET_DROP;
-		}
-
-		frag = frag->frags;
+	if (!ieee802154_create_data_frame(ctx, net_pkt_ll_dst(pkt),
+					  pkt->frags, reserved_space)) {
+#ifdef CONFIG_NET_L2_IEEE802154_FRAGMENT
+		ieee802154_fragment_close(pkt);
+#endif
+		return NET_DROP;
 	}
 
 	pkt_hexdump(TX_PKT_TITLE " (with ll)", pkt, false, true);

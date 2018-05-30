@@ -144,6 +144,19 @@ struct net_pkt {
 	u8_t ieee802154_lqi;  /* Link Quality Indicator */
 #endif
 
+#if defined(CONFIG_NET_L2_IEEE802154_FRAGMENT)
+	struct {
+		struct net_buf *orig_frags;
+		int hdr_diff;
+		u16_t offset;
+		u16_t copied;
+		u16_t size;
+		u16_t tag;
+		bool init;
+		bool next;
+	} fragment;
+#endif
+
 #if NET_TC_COUNT > 1
 	/** Network packet priority, can be left out in which case packet
 	 * is not prioritised.

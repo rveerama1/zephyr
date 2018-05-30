@@ -422,6 +422,7 @@ static int test_fragment(struct net_fragment_data *data)
 	struct net_pkt *pkt;
 	struct net_buf *frag, *dfrag;
 	int diff;
+	int i = 0;
 
 	pkt = create_pkt(data);
 	if (!pkt) {
@@ -439,22 +440,32 @@ static int test_fragment(struct net_fragment_data *data)
 		goto end;
 	}
 
-	if (!(ieee802154_fragment(pkt, diff))) {
-		TC_PRINT("fragmentation failed\n");
-		goto end;
-	}
-
 #if DEBUG > 0
-	printk("length after compression and fragmentation %zd\n",
-	       net_pkt_get_len(pkt));
+	printk("length after compression %zd\n", net_pkt_get_len(pkt));
 	net_hexdump_frags("after-compression", pkt, false);
 #endif
 
-	frag = pkt->frags;
+	if (!(ieee802154_fragment_init(pkt, diff))) {
+		TC_PRINT("fragment init failed\n");
+		goto end;
+	}
 
-	while (frag) {
+
+	do {
+		if (!(ieee802154_fragment_next(pkt))) {
+			TC_PRINT("fragmentation failed\n");
+			goto end;
+		}
+
+#if DEBUG > 0
+		printk("length after fragment[%d] %zd\n", i++,
+		       net_pkt_get_len(pkt));
+		net_hexdump_frags("", pkt, false);
+#endif
+
 		rxpkt = net_pkt_get_reserve_rx(0, K_FOREVER);
 		if (!rxpkt) {
+			TC_PRINT("failed to allocate memory\n");
 			goto end;
 		}
 
@@ -462,25 +473,24 @@ static int test_fragment(struct net_fragment_data *data)
 
 		dfrag = net_pkt_get_frag(rxpkt, K_FOREVER);
 		if (!dfrag) {
+			TC_PRINT("failed to allocate memory\n");
 			goto end;
 		}
 
-		memcpy(dfrag->data, frag->data, frag->len);
-		dfrag->len = frag->len;
+		memcpy(dfrag->data, pkt->frags->data, pkt->frags->len);
+		dfrag->len = pkt->frags->len;
 
 		net_pkt_frag_add(rxpkt, dfrag);
 
 		switch (ieee802154_reassemble(rxpkt)) {
 		case NET_OK:
-			frag = frag->frags;
 			break;
 		case NET_CONTINUE:
 			goto compare;
 		case NET_DROP:
-			net_pkt_unref(rxpkt);
 			goto end;
 		}
-	}
+	} while (ieee802154_fragment_has_next(pkt));
 
 compare:
 #if DEBUG > 0
@@ -494,6 +504,8 @@ compare:
 	}
 
 end:
+	ieee802154_fragment_close(pkt);
+
 	net_pkt_unref(rxpkt);
 	net_pkt_unref(pkt);
 

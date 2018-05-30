@@ -81,6 +81,7 @@ static inline int tx_packet_fragments(struct net_if *iface,
 				      ieee802154_radio_tx_frag_t *tx_func)
 {
 	int ret = 0;
+/*
 	struct net_buf *frag;
 
 	frag = pkt->frags;
@@ -102,6 +103,15 @@ static inline int tx_packet_fragments(struct net_if *iface,
 
 	if (!ret) {
 		net_pkt_unref(pkt);
+	}
+*/
+
+	if (IS_ENABLED(CONFIG_NET_L2_IEEE802154_RADIO_CSMA_CA) &&
+	    ieee802154_get_hw_capabilities(iface) &
+	    IEEE802154_HW_CSMA) {
+		ret = ieee802154_tx(iface, pkt);
+	} else {
+		ret = tx_func(iface, pkt);
 	}
 
 	return ret;

@@ -171,6 +171,10 @@ struct net_pkt {
 		u8_t ipv4_ttl;
 	};
 
+#if defined(CONFIG_NET_IPV4)
+	u8_t ipv4_opts_len; /* Length if IPv4 Header Options */
+#endif
+
 #if NET_TC_COUNT > 1
 	/** Network packet priority, can be left out in which case packet
 	 * is not prioritised.
@@ -370,6 +374,17 @@ static inline void net_pkt_set_ipv4_ttl(struct net_pkt *pkt,
 {
 	pkt->ipv4_ttl = ttl;
 }
+
+static inline u8_t net_pkt_ipv4_opts_len(struct net_pkt *pkt)
+{
+	return pkt->ipv4_opts_len;
+}
+
+static inline void net_pkt_set_ipv4_opts_len(struct net_pkt *pkt,
+					     u8_t opts_len)
+{
+	pkt->ipv4_opts_len = opts_len;
+}
 #else
 static inline u8_t net_pkt_ipv4_ttl(struct net_pkt *pkt)
 {
@@ -383,6 +398,19 @@ static inline void net_pkt_set_ipv4_ttl(struct net_pkt *pkt,
 {
 	ARG_UNUSED(pkt);
 	ARG_UNUSED(ttl);
+}
+
+static inline u8_t net_pkt_ipv4_opts_len(struct net_pkt *pkt)
+{
+	ARG_UNUSED(pkt);
+	return 0;
+}
+
+static inline void net_pkt_set_ipv4_opts_len(struct net_pkt *pkt,
+					     u8_t opts_len)
+{
+	ARG_UNUSED(pkt);
+	ARG_UNUSED(opts_len);
 }
 #endif
 

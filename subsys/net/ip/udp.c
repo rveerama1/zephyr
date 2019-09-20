@@ -48,6 +48,7 @@ int net_udp_finalize(struct net_pkt *pkt)
 
 	length = net_pkt_get_len(pkt) -
 		net_pkt_ip_hdr_len(pkt) -
+		net_pkt_ipv4_opts_len(pkt) -
 		net_pkt_ipv6_ext_len(pkt);
 	udp_hdr->len = htons(length);
 
@@ -75,6 +76,7 @@ struct net_udp_hdr *net_udp_get_hdr(struct net_pkt *pkt,
 	net_pkt_cursor_init(pkt);
 
 	if (net_pkt_skip(pkt, net_pkt_ip_hdr_len(pkt) +
+			 net_pkt_ipv4_opts_len(pkt) +
 			 net_pkt_ipv6_ext_len(pkt))) {
 		udp_hdr = NULL;
 		goto out;
@@ -104,6 +106,7 @@ struct net_udp_hdr *net_udp_set_hdr(struct net_pkt *pkt,
 	net_pkt_cursor_init(pkt);
 
 	if (net_pkt_skip(pkt, net_pkt_ip_hdr_len(pkt) +
+			 net_pkt_ipv4_opts_len(pkt) +
 			 net_pkt_ipv6_ext_len(pkt))) {
 		udp_hdr = NULL;
 		goto out;
@@ -156,6 +159,7 @@ struct net_udp_hdr *net_udp_input(struct net_pkt *pkt,
 
 	if (ntohs(udp_hdr->len) != (net_pkt_get_len(pkt) -
 				    net_pkt_ip_hdr_len(pkt) -
+				    net_pkt_ipv4_opts_len(pkt) -
 				    net_pkt_ipv6_ext_len(pkt))) {
 		NET_DBG("DROP: Invalid hdr length");
 		goto drop;

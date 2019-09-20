@@ -871,6 +871,7 @@ int net_tcp_send_pkt(struct net_pkt *pkt)
 	net_pkt_set_overwrite(pkt, true);
 
 	if (net_pkt_skip(pkt, net_pkt_ip_hdr_len(pkt) +
+			 net_pkt_ipv4_opts_len(pkt) +
 			 net_pkt_ipv6_ext_len(pkt))) {
 		return -EMSGSIZE;
 	}
@@ -906,6 +907,7 @@ int net_tcp_send_pkt(struct net_pkt *pkt)
 	if (calc_chksum) {
 		net_pkt_cursor_init(pkt);
 		net_pkt_skip(pkt, net_pkt_ip_hdr_len(pkt) +
+			     net_pkt_ipv4_opts_len(pkt) +
 			     net_pkt_ipv6_ext_len(pkt));
 
 		/* No need to get tcp_hdr again */
@@ -1069,7 +1071,8 @@ bool net_tcp_ack_received(struct net_context *ctx, u32_t ack)
 		net_pkt_set_overwrite(pkt, true);
 
 		if (net_pkt_skip(pkt, net_pkt_ip_hdr_len(pkt) +
-			 net_pkt_ipv6_ext_len(pkt))) {
+				 net_pkt_ipv4_opts_len(pkt) +
+				 net_pkt_ipv6_ext_len(pkt))) {
 			sys_slist_remove(list, NULL, head);
 			net_pkt_unref(pkt);
 			continue;

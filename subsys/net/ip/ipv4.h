@@ -22,6 +22,12 @@
 
 #define NET_IPV4_IHL_MASK 0x0F
 
+/* IPv4 Options */
+#define NET_IPV4_OPTS_EO   0   /* End of Options */
+#define NET_IPV4_OPTS_NOP  1   /* No operation */
+#define NET_IPV4_OPTS_RR   7   /* Record Route */
+#define NET_IPV4_OPTS_TS   68  /* Timestamp */
+
 /**
  * @brief Create IPv4 packet in provided net_pkt.
  *

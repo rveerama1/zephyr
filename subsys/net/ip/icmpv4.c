@@ -48,6 +48,14 @@ int net_icmpv4_finalize(struct net_pkt *pkt)
 	NET_PKT_DATA_ACCESS_CONTIGUOUS_DEFINE(icmpv4_access,
 					      struct net_icmp_hdr);
 	struct net_icmp_hdr *icmp_hdr;
+	u8_t opts_len;
+
+	opts_len = net_pkt_ipv4_opts_len(pkt);
+	if (opts_len) {
+		if (net_pkt_skip(pkt, opts_len)) {
+			return -ENOBUFS;
+		}
+	}
 
 	icmp_hdr = (struct net_icmp_hdr *)net_pkt_get_data(pkt, &icmpv4_access);
 	if (!icmp_hdr) {
@@ -59,13 +67,130 @@ int net_icmpv4_finalize(struct net_pkt *pkt)
 	return net_pkt_set_data(pkt, &icmpv4_access);
 }
 
+static int icmpv4_parse_header_options(struct net_pkt *pkt,
+				       struct net_pkt *reply,
+				       u8_t opts_len)
+{
+	u8_t len = 0;
+
+	/* Parse Options in EchoRequest */
+	net_pkt_cursor_init(pkt);
+
+	if (net_pkt_skip(pkt, sizeof(struct net_ipv4_hdr))) {
+		goto drop;
+	}
+
+	while (opts_len) {
+		u8_t opt_len = 0;
+		u8_t opt_type;
+
+		/* Each option has type and length */
+		if (net_pkt_read_u8(pkt, &opt_type)) {
+			goto drop;
+		}
+
+		opts_len--;
+
+		if (!(opt_type == NET_IPV4_OPTS_EO ||
+		      opt_type == NET_IPV4_OPTS_NOP)) {
+			if (net_pkt_read_u8(pkt, &opt_len)) {
+				goto drop;
+			}
+
+			opt_len -= 2;
+			opts_len--;
+		}
+
+		switch (opt_type) {
+		case NET_IPV4_OPTS_NOP:
+			break;
+
+		case NET_IPV4_OPTS_EO:
+			if (opts_len) {
+				/* End of options */
+				goto drop;
+			}
+
+			break;
+
+		case NET_IPV4_OPTS_RR:
+		case NET_IPV4_OPTS_TS:
+			/* TODO: Timestamp value should updated,
+			 * as per RFC 791 Internet Timestamp.
+			 * Timestamp value : 32-bit timestamp in
+			 * milliseconds since midnight UT.
+			 */
+			if (net_pkt_write_u8(reply, opt_type)) {
+				goto drop;
+			}
+
+			len++;
+
+			if (net_pkt_write_u8(reply, opt_len + 2)) {
+				goto drop;
+			}
+
+			len++;
+
+			if (net_pkt_copy(reply, pkt, opt_len)) {
+				goto drop;
+			}
+
+			len += opt_len;
+
+			break;
+
+		default:
+			if (net_pkt_skip(pkt, opt_len)) {
+				goto drop;
+			}
+
+			break;
+		}
+
+		if (opt_len > opts_len) {
+			goto drop;
+		}
+
+		opts_len -= opt_len;
+	}
+
+	if (net_pkt_skip(pkt, NET_ICMPH_LEN)) {
+		goto drop;
+	}
+
+	/* IPv4 header should ends in 32 bit boundary */
+	if (len % 4U != 0U) {
+		u8_t i = 4U - (len % 4U);
+
+		while (i--) {
+			if (net_pkt_write_u8(reply, NET_IPV4_OPTS_NOP)) {
+				goto drop;
+			}
+
+			len++;
+		}
+	}
+
+	/* Options are added now, update the header length. */
+	net_pkt_set_ipv4_opts_len(reply, len);
+
+	return 0;
+
+drop:
+	NET_DBG("DROP: failed to parse options");
+
+	return -1;
+}
+
 static enum net_verdict icmpv4_handle_echo_request(struct net_pkt *pkt,
-						   struct net_ipv4_hdr *ip_hdr,
-						   struct net_icmp_hdr *icmp_hdr)
+					   struct net_ipv4_hdr *ip_hdr,
+					   struct net_icmp_hdr *icmp_hdr)
 {
 	struct net_pkt *reply = NULL;
 	const struct in_addr *src;
 	s16_t payload_len;
+	u8_t opts_len;
 
 	/* If interface can not select src address based on dst addr
 	 * and src address is unspecified, drop the echo request.
@@ -80,13 +205,17 @@ static enum net_verdict icmpv4_handle_echo_request(struct net_pkt *pkt,
 		log_strdup(net_sprint_ipv4_addr(&ip_hdr->dst)));
 
 	payload_len = net_pkt_get_len(pkt) -
-		net_pkt_ip_hdr_len(pkt) - NET_ICMPH_LEN;
+		      net_pkt_ip_hdr_len(pkt) -
+		      net_pkt_ipv4_opts_len(pkt) - NET_ICMPH_LEN;
 	if (payload_len < NET_ICMPV4_UNUSED_LEN) {
 		/* No identifier or sequence number present */
 		goto drop;
 	}
 
-	reply = net_pkt_alloc_with_buffer(net_pkt_iface(pkt), payload_len,
+	opts_len = net_pkt_ipv4_opts_len(pkt);
+
+	reply = net_pkt_alloc_with_buffer(net_pkt_iface(pkt),
+					  opts_len + payload_len,
 					  AF_INET, IPPROTO_ICMP,
 					  PKT_WAIT_TIME);
 	if (!reply) {
@@ -101,10 +230,18 @@ static enum net_verdict icmpv4_handle_echo_request(struct net_pkt *pkt,
 		src = &ip_hdr->dst;
 	}
 
-	if (net_ipv4_create(reply, src, &ip_hdr->src) ||
-	    icmpv4_create(reply, NET_ICMPV4_ECHO_REPLY, 0) ||
+	if (net_ipv4_create(reply, src, &ip_hdr->src)) {
+		goto drop;
+	}
+
+	if (opts_len) {
+		if (icmpv4_parse_header_options(pkt, reply, opts_len)) {
+			goto drop;
+		}
+	}
+
+	if (icmpv4_create(reply, NET_ICMPV4_ECHO_REPLY, 0) ||
 	    net_pkt_copy(reply, pkt, payload_len)) {
-		NET_DBG("DROP: wrong buffer");
 		goto drop;
 	}
 

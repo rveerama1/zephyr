@@ -39,14 +39,15 @@ static int nfds;
 static bool mqtt_connected;
 
 static struct k_delayed_work pub_message;
+/*
 #if defined(CONFIG_NET_DHCPV4)
 static struct k_delayed_work check_network_conn;
-
+*/
 /* Network Management events */
 #define L4_EVENT_MASK (NET_EVENT_L4_CONNECTED | NET_EVENT_L4_DISCONNECTED)
 
 static struct net_mgmt_event_callback l4_mgmt_cb;
-#endif
+/*#endif*/
 
 #if defined(CONFIG_DNS_RESOLVER)
 static struct addrinfo hints;
@@ -474,7 +475,7 @@ end:
 }
 #endif
 
-#if defined(CONFIG_NET_DHCPV4)
+/*#if defined(CONFIG_NET_DHCPV4)*/
 static void abort_mqtt_connection(void)
 {
 	if (mqtt_connected) {
@@ -493,7 +494,8 @@ static void l4_event_handler(struct net_mgmt_event_callback *cb,
 
 	if (mgmt_event == NET_EVENT_L4_CONNECTED) {
 		/* Wait for DHCP to be back in BOUND state */
-		k_delayed_work_submit(&check_network_conn, 3 * MSEC_PER_SEC);
+/*		k_delayed_work_submit(&check_network_conn, 3 * MSEC_PER_SEC);*/
+		k_sem_give(&mqtt_start);
 
 		return;
 	}
@@ -501,12 +503,12 @@ static void l4_event_handler(struct net_mgmt_event_callback *cb,
 	if (mgmt_event == NET_EVENT_L4_DISCONNECTED) {
 		k_sem_give(&publish_msg);
 		abort_mqtt_connection();
-		k_delayed_work_cancel(&check_network_conn);
+/*		k_delayed_work_cancel(&check_network_conn);*/
 
 		return;
 	}
 }
-#endif
+/*#endif*/
 
 void main(void)
 {
@@ -521,13 +523,13 @@ void main(void)
 
 	k_delayed_work_init(&pub_message, publish_timeout);
 
-#if defined(CONFIG_NET_DHCPV4)
+/*#if defined(CONFIG_NET_DHCPV4)
 	k_delayed_work_init(&check_network_conn, check_network_connection);
-
+*/
 	net_mgmt_init_event_callback(&l4_mgmt_cb, l4_event_handler,
 				     L4_EVENT_MASK);
 	net_mgmt_add_event_callback(&l4_mgmt_cb);
-#endif
+/*#endif*/
 
 	connect_to_cloud_and_publish();
 }
